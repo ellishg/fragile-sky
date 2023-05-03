@@ -1,0 +1,19 @@
+[package]
+name = "fragile-sky"
+version = "0.1.0"
+authors = ["Ellis Hoag <ellis.sparky.hoag@gmail.com>"]
+edition = "2021"
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+hal = { package = "esp32c6-hal", version = "0.1.0" }
+esp-backtrace = { version = "0.7.0", features = ["esp32c6", "panic-handler", "exception-handler", "print-uart"] }
+esp-println = { version = "0.5.0", features = ["esp32c6"] }
+esp-hal-smartled = { version = "0.1.0", features = ["esp32c6"] }
+# https://github.com/caemor/epd-waveshare/pull/145
+epd-waveshare = { git = "https://github.com/tomgilligan/epd-waveshare.git", branch ="epd2in13b_v4" }
+embedded-graphics = "0.7.1"
+smart-leds = "0.3.0"
