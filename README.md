@@ -1,6 +1,8 @@
 # fragile-sky
 Display SF MUNI transit times on an epd2in13b_v4 e-ink display with an esp32c6 board
 
+[![Rust](https://github.com/ellishg/fragile-sky/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ellishg/fragile-sky/actions/workflows/build.yml)
+
 ## Pins
 ### https://docs.espressif.com/projects/espressif-esp-dev-kits/en/latest/esp32c6/esp32-c6-devkitc-1/user_guide.html
 ```
