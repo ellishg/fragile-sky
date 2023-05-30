@@ -17,3 +17,6 @@ esp-hal-smartled = { version = "0.1.0", features = ["esp32c6"] }
 epd-waveshare = { git = "https://github.com/tomgilligan/epd-waveshare.git", branch ="epd2in13b_v4" }
 embedded-graphics = "0.7.1"
 smart-leds = "0.3.0"
+serde_json = { version = "1.0.96", default-features = false, features = ["alloc"] }
+chrono = { version = "0.4.24", default-features = false }
+spin = "0.9.8"
