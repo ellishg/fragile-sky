@@ -24,7 +24,6 @@ use hal::{
     prelude::*,
     pulse_control, spi, timer, Delay, PulseControl, Rtc, IO,
 };
-use serde_json;
 use smart_leds::{
     hsv::{hsv2rgb, Hsv},
     SmartLedsWrite,
