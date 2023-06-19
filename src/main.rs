@@ -1,3 +1,5 @@
+// TODO: We may be able to use esp-idf now
+// https://mabez.dev/blog/posts/esp-rust-30-06-2023/
 #![no_std]
 #![no_main]
 
@@ -11,24 +13,39 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
+use embedded_io::blocking::*;
+use embedded_svc::ipv4::Interface;
+use embedded_svc::wifi::{ClientConfiguration, Configuration, Wifi};
 use epd_waveshare::{
     epd2in13b_v4::{Display2in13b, Epd2in13b},
     prelude::*,
 };
 use esp_backtrace as _;
 use esp_hal_smartled::SmartLedsAdapter;
-// use esp_println::println;
+use esp_println::println;
+use esp_wifi::wifi::{utils::create_network_interface, WifiMode};
+use esp_wifi::wifi_interface::WifiStack;
+use esp_wifi::{current_millis, EspWifiInitFor};
 use hal::{
     clock, gpio,
     peripherals::{Peripherals, SPI2},
     prelude::*,
-    pulse_control, spi, timer, Delay, PulseControl, Rtc, IO,
+    pulse_control, spi,
+    systimer::SystemTimer,
+    timer, Delay, PulseControl, Rtc, IO,
 };
 use smart_leds::{
     hsv::{hsv2rgb, Hsv},
     SmartLedsWrite,
 };
+use smoltcp::iface::SocketStorage;
+use smoltcp::wire::IpAddress;
+use smoltcp::wire::Ipv4Address;
 use spin::Mutex;
+
+// TODO: use env!()
+const SSID: Option<&str> = option_env!("SSID");
+const PASSWORD: Option<&str> = option_env!("PASSWORD");
 
 // Implement a very bad bump allocator so we allocate memory
 struct BadAllocator {
@@ -63,48 +80,13 @@ unsafe impl GlobalAlloc for BadAllocator {
 }
 
 type Spi<'a> = spi::Spi<'a, SPI2, spi::FullDuplexMode>;
-type CSPin = gpio::GpioPin<
-    gpio::Output<gpio::PushPull>,
-    gpio::Bank0GpioRegisterAccess,
-    gpio::SingleCoreInteruptStatusRegisterAccessBank0,
-    gpio::InputOutputAnalogPinType,
-    gpio::Gpio5Signals,
-    5,
->;
-type BusyPin = gpio::GpioPin<
-    hal::gpio::Input<hal::gpio::Floating>,
-    gpio::Bank0GpioRegisterAccess,
-    gpio::SingleCoreInteruptStatusRegisterAccessBank0,
-    gpio::InputOutputAnalogPinType,
-    gpio::Gpio4Signals,
-    4,
->;
-type DCPin = gpio::GpioPin<
-    gpio::Output<gpio::PushPull>,
-    gpio::Bank0GpioRegisterAccess,
-    gpio::SingleCoreInteruptStatusRegisterAccessBank0,
-    gpio::InputOutputPinType,
-    gpio::Gpio17Signals,
-    17,
->;
-type RSTPin = gpio::GpioPin<
-    gpio::Output<gpio::PushPull>,
-    gpio::Bank0GpioRegisterAccess,
-    gpio::SingleCoreInteruptStatusRegisterAccessBank0,
-    gpio::InputOutputPinType,
-    gpio::Gpio16Signals,
-    16,
->;
+type CSPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 5>;
+type BusyPin = gpio::GpioPin<hal::gpio::Input<hal::gpio::Floating>, 4>;
+type DCPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 17>;
+type RSTPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 16>;
 type Epd<'a> = Epd2in13b<Spi<'a>, CSPin, BusyPin, DCPin, RSTPin, Delay>;
 type EPaperDisplay = Display<122, 250, false, 8000, TriColor>;
-type LEDPin = gpio::GpioPin<
-    hal::gpio::Unknown,
-    gpio::Bank0GpioRegisterAccess,
-    gpio::SingleCoreInteruptStatusRegisterAccessBank0,
-    gpio::InputOutputPinType,
-    gpio::Gpio8Signals,
-    8,
->;
+type LEDPin = gpio::GpioPin<hal::gpio::Unknown, 8>;
 type Led<'a> = SmartLedsAdapter<pulse_control::ConfiguredChannel0<'a, LEDPin>, 25>;
 
 struct Context<'a> {
@@ -119,7 +101,8 @@ struct Context<'a> {
 fn init<'a>() -> Context<'a> {
     let peripherals = Peripherals::take();
     let mut system = peripherals.PCR.split();
-    let clocks = clock::ClockControl::boot_defaults(system.clock_control).freeze();
+    let clocks =
+        clock::ClockControl::configure(system.clock_control, clock::CpuClock::Clock160MHz).freeze();
 
     // Disable the RTC and TIMG watchdog timers
     let mut rtc = Rtc::new(peripherals.LP_CLKRST);
@@ -139,6 +122,107 @@ fn init<'a>() -> Context<'a> {
     rtc.rwdt.disable();
     wdt0.disable();
     wdt1.disable();
+
+    let timer = SystemTimer::new(peripherals.SYSTIMER).alarm0;
+    let init = esp_wifi::initialize(
+        EspWifiInitFor::Wifi,
+        timer,
+        hal::Rng::new(peripherals.RNG),
+        system.radio_clock_control,
+        &clocks,
+    )
+    .unwrap();
+
+    let (wifi, _, _) = peripherals.RADIO.split();
+    let mut socket_set_entries: [SocketStorage; 3] = Default::default();
+    let (iface, device, mut controller, sockets) =
+        create_network_interface(&init, wifi, WifiMode::Sta, &mut socket_set_entries);
+    let wifi_stack = WifiStack::new(iface, device, sockets, current_millis);
+
+    let client_config = Configuration::Client(ClientConfiguration {
+        ssid: SSID.unwrap().into(),
+        password: PASSWORD.unwrap().into(),
+        ..Default::default()
+    });
+
+    let res = controller.set_configuration(&client_config);
+    println!("wifi_set_configuration returned {:?}", res);
+
+    controller.start().unwrap();
+    println!("is wifi started: {:?}", controller.is_started());
+
+    println!("{:?}", controller.get_capabilities());
+    println!("wifi_connect {:?}", controller.connect());
+
+    // wait to get connected
+    println!("Wait to get connected");
+    loop {
+        let res = controller.is_connected();
+        match res {
+            Ok(connected) => {
+                if connected {
+                    break;
+                }
+            }
+            Err(err) => {
+                println!("Did not connect: {:?}", err);
+                loop {}
+            }
+        }
+    }
+    println!("connected: {:?}", controller.is_connected());
+
+    // wait for getting an ip address
+    println!("Wait to get an ip address");
+    loop {
+        wifi_stack.work();
+
+        if wifi_stack.is_iface_up() {
+            println!("got ip {:?}", wifi_stack.get_ip_info());
+            break;
+        }
+    }
+
+    // TODO: Add wifi_stack to Context
+    let mut rx_buffer = [0u8; 1536];
+    let mut tx_buffer = [0u8; 1536];
+    let mut socket = wifi_stack.get_socket(&mut rx_buffer, &mut tx_buffer);
+
+    println!("Making HTTP request");
+    socket.work();
+
+    socket
+        .open(IpAddress::Ipv4(Ipv4Address::new(142, 250, 217, 211)), 80)
+        .unwrap();
+
+    socket
+        .write(b"GET / HTTP/1.0\r\nHost: www.mobile-j.de\r\n\r\n")
+        .unwrap();
+    socket.flush().unwrap();
+
+    let wait_end = current_millis() + 20 * 1000;
+    loop {
+        let mut buffer = [0u8; 512];
+        if let Ok(len) = socket.read(&mut buffer) {
+            let to_print = unsafe { core::str::from_utf8_unchecked(&buffer[..len]) };
+            println!("{}", to_print);
+        } else {
+            break;
+        }
+
+        if current_millis() > wait_end {
+            println!("Timeout");
+            break;
+        }
+    }
+    println!();
+
+    socket.disconnect();
+
+    let wait_end = current_millis() + 5 * 1000;
+    while current_millis() < wait_end {
+        socket.work();
+    }
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut delay = Delay::new(&clocks);
@@ -326,6 +410,8 @@ fn get_minutes_until_next_arrival() -> i64 {
     }
   }
 }"###;
+    // TODO: Use heapless
+    // https://stackoverflow.com/questions/69976190/how-do-i-use-serde-json-core-to-deserialise-an-array-without-allocations
     let v = serde_json::from_str::<serde_json::Value>(raw_str).unwrap();
     let expected_arrival_time = v["ServiceDelivery"]["StopMonitoringDelivery"]
         ["MonitoredStopVisit"][0]["MonitoredVehicleJourney"]["MonitoredCall"]
