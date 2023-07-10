@@ -46,6 +46,7 @@ use spin::Mutex;
 // TODO: use env!()
 const SSID: Option<&str> = option_env!("SSID");
 const PASSWORD: Option<&str> = option_env!("PASSWORD");
+const API_KEY: Option<&str> = option_env!("API_KEY");
 
 // Implement a very bad bump allocator so we allocate memory
 struct BadAllocator {
@@ -190,38 +191,35 @@ fn init<'a>() -> Context<'a> {
     println!("Making HTTP request");
     socket.work();
 
+    // http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=13911
+    // TODO: DNS lookup
     socket
-        .open(IpAddress::Ipv4(Ipv4Address::new(142, 250, 217, 211)), 80)
+        .open(IpAddress::Ipv4(Ipv4Address::new(52, 8, 155, 117)), 80)
         .unwrap();
 
+    // curl -X GET -v -I "http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=13911"
     socket
-        .write(b"GET / HTTP/1.0\r\nHost: www.mobile-j.de\r\n\r\n")
+        .write(format!("GET /transit/StopMonitoring?api_key={}&agency=SF&format=json&stopcode=13911 HTTP/1.1\r\nHost: api.511.org\r\nAccept: application/json\r\nAccept-Encoding: identity\r\n\r\n", API_KEY.unwrap()).as_bytes())
         .unwrap();
     socket.flush().unwrap();
 
-    let wait_end = current_millis() + 20 * 1000;
     loop {
-        let mut buffer = [0u8; 512];
+        let mut buffer = [0u8; 1024 * 16];
         if let Ok(len) = socket.read(&mut buffer) {
             let to_print = unsafe { core::str::from_utf8_unchecked(&buffer[..len]) };
-            println!("{}", to_print);
+            if to_print.len() > 2 {
+                // TODO: There has got to be a better way to read the socket, or maybe I can use a crate
+                println!("{}", to_print);
+                break;
+            }
         } else {
-            break;
-        }
-
-        if current_millis() > wait_end {
-            println!("Timeout");
             break;
         }
     }
     println!();
 
     socket.disconnect();
-
-    let wait_end = current_millis() + 5 * 1000;
-    while current_millis() < wait_end {
-        socket.work();
-    }
+    socket.work();
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut delay = Delay::new(&clocks);
