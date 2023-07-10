@@ -165,8 +165,7 @@ fn init<'a>() -> Context<'a> {
                 }
             }
             Err(err) => {
-                println!("Did not connect: {:?}", err);
-                loop {}
+                panic!("Did not connect: {:?}", err);
             }
         }
     }
