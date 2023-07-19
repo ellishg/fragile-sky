@@ -272,7 +272,7 @@ fn init<'a>() -> Context<'a> {
     }
 }
 
-fn get_minutes_until_next_arrival(content: &String) -> i64 {
+fn get_minutes_until_next_arrival(content: &str) -> i64 {
     let v: serde_json::Value = serde_json::from_str(content).unwrap();
     let expected_arrival_time = v["ServiceDelivery"]["StopMonitoringDelivery"]
         ["MonitoredStopVisit"][0]["MonitoredVehicleJourney"]["MonitoredCall"]
