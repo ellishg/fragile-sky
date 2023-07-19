@@ -6,6 +6,9 @@
 extern crate alloc;
 
 use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
 use chrono::NaiveDateTime;
 use embedded_graphics::{
     mono_font::{ascii::FONT_6X13, MonoTextStyle},
@@ -68,6 +71,38 @@ struct Context<'a> {
     epd: Epd<'a>,
     display: EPaperDisplay,
     led: Led<'a>,
+    next_arrival: i64,
+}
+
+fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> String {
+    let mut buffer: Vec<u8> = vec![];
+    loop {
+        let mut chunk = [0u8; 1024];
+        if let Ok(bytes_read) = socket.read(&mut chunk) {
+            buffer.extend_from_slice(&chunk[..bytes_read]);
+        } else if !buffer.is_empty() {
+            let mut headers = [httparse::EMPTY_HEADER; 64];
+            let mut response = httparse::Response::new(&mut headers);
+            if let Ok(httparse::Status::Complete(content_start)) = response.parse(&buffer) {
+                let content = &buffer[content_start..];
+                // TODO: I'm not sure if this is needed to guarantee the content is complete
+                // for header in response.headers.iter() {
+                //     if header.name == "Content-Length" {
+                //         let value = core::str::from_utf8(header.value).unwrap();
+                //         let expected_content_length: usize = value.parse().unwrap();
+                //         if content.len() >= expected_content_length {
+                //             return core::str::from_utf8(content).unwrap().to_string();
+                //         }
+                //     }
+                // }
+                return core::str::from_utf8(content)
+                    .unwrap()
+                    // TODO: I'm not sure why, but the content is prefixed with "ï»¿"
+                    .replace(|c: char| !c.is_ascii(), "")
+                    .to_string();
+            }
+        }
+    }
 }
 
 // TODO: Return result type
@@ -138,6 +173,7 @@ fn init<'a>() -> Context<'a> {
                 }
             }
             Err(err) => {
+                // TODO: This sometimes fails, retry
                 panic!("Did not connect: {:?}", err);
             }
         }
@@ -171,27 +207,18 @@ fn init<'a>() -> Context<'a> {
 
     // curl -X GET -v -I "http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=13911"
     socket
-        .write(format!("GET /transit/StopMonitoring?api_key={}&agency=SF&format=json&stopcode=13911 HTTP/1.1\r\nHost: api.511.org\r\nAccept: application/json\r\nAccept-Encoding: identity\r\n\r\n", API_KEY.unwrap()).as_bytes())
+        .write(format!("GET /transit/StopMonitoring?api_key={}&agency=SF&format=json&stopcode=13911 HTTP/1.0\r\nHost: api.511.org\r\nAccept: application/json\r\nAccept-Encoding: identity\r\n\r\n", API_KEY.unwrap()).as_bytes())
         .unwrap();
     socket.flush().unwrap();
 
-    loop {
-        let mut buffer = [0u8; 1024 * 16];
-        if let Ok(len) = socket.read(&mut buffer) {
-            let to_print = unsafe { core::str::from_utf8_unchecked(&buffer[..len]) };
-            if to_print.len() > 2 {
-                // TODO: There has got to be a better way to read the socket, or maybe I can use a crate
-                println!("{}", to_print);
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    println!();
+    let content = read_content(&mut socket);
+    // println!("{}", content);
 
     socket.disconnect();
     socket.work();
+
+    let next_arrival = get_minutes_until_next_arrival(&content);
+    println!("Next eastbound N: {} minutes", next_arrival);
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut delay = Delay::new(&clocks);
@@ -199,6 +226,7 @@ fn init<'a>() -> Context<'a> {
     let clk = io.pins.gpio18;
     let din = io.pins.gpio23;
 
+    // TODO: I believe printing breaks after this
     let mut spi = spi::Spi::new_no_cs_no_miso(
         peripherals.SPI2,
         clk,
@@ -240,148 +268,12 @@ fn init<'a>() -> Context<'a> {
         epd,
         display,
         led,
+        next_arrival,
     }
 }
 
-fn get_minutes_until_next_arrival() -> i64 {
-    // https://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=13911
-    // https://www.sfmta.com/stops/carl-st-cole-st-13911
-    // Inline an example response until I get WiFi working
-    let raw_str = r###"
-{
-  "ServiceDelivery": {
-    "ResponseTimestamp": "2023-05-28T16:46:32Z",
-    "ProducerRef": "SF",
-    "Status": true,
-    "StopMonitoringDelivery": {
-      "version": "1.4",
-      "ResponseTimestamp": "2023-05-28T16:46:32Z",
-      "Status": true,
-      "MonitoredStopVisit": [
-        {
-          "RecordedAtTime": "2023-05-28T16:46:26Z",
-          "MonitoringRef": "13911",
-          "MonitoredVehicleJourney": {
-            "LineRef": "N",
-            "DirectionRef": "IB",
-            "FramedVehicleJourneyRef": {
-              "DataFrameRef": "2023-05-28",
-              "DatedVehicleJourneyRef": "11300630"
-            },
-            "PublishedLineName": "JUDAH",
-            "OperatorRef": "SF",
-            "OriginRef": "15223",
-            "OriginName": "Judah/La Playa/Ocean Beach",
-            "DestinationRef": "15239",
-            "DestinationName": "Caltrain/Ballpark",
-            "Monitored": true,
-            "InCongestion": null,
-            "VehicleLocation": {
-              "Longitude": "-122.466629",
-              "Latitude": "37.762146"
-            },
-            "Bearing": "75.0000000000",
-            "Occupancy": "seatsAvailable",
-            "VehicleRef": "2014",
-            "MonitoredCall": {
-              "StopPointRef": "13911",
-              "StopPointName": "Carl St & Cole St",
-              "VehicleLocationAtStop": "",
-              "VehicleAtStop": "false",
-              "DestinationDisplay": "Caltrain/Ballpark",
-              "AimedArrivalTime": "2023-05-28T16:52:06Z",
-              "ExpectedArrivalTime": "2023-05-28T16:54:32Z",
-              "AimedDepartureTime": "2023-05-28T16:52:06Z",
-              "ExpectedDepartureTime": null,
-              "Distances": ""
-            }
-          }
-        },
-        {
-          "RecordedAtTime": "2023-05-28T16:46:26Z",
-          "MonitoringRef": "13911",
-          "MonitoredVehicleJourney": {
-            "LineRef": "N",
-            "DirectionRef": "IB",
-            "FramedVehicleJourneyRef": {
-              "DataFrameRef": "2023-05-28",
-              "DatedVehicleJourneyRef": "11300631"
-            },
-            "PublishedLineName": "JUDAH",
-            "OperatorRef": "SF",
-            "OriginRef": "15223",
-            "OriginName": "Judah/La Playa/Ocean Beach",
-            "DestinationRef": "15239",
-            "DestinationName": "Caltrain/Ballpark",
-            "Monitored": true,
-            "InCongestion": null,
-            "VehicleLocation": {
-              "Longitude": "-122.496506",
-              "Latitude": "37.7608376"
-            },
-            "Bearing": "75.0000000000",
-            "Occupancy": "seatsAvailable",
-            "VehicleRef": "2043",
-            "MonitoredCall": {
-              "StopPointRef": "13911",
-              "StopPointName": "Carl St & Cole St",
-              "VehicleLocationAtStop": "",
-              "VehicleAtStop": "false",
-              "DestinationDisplay": "Caltrain/Ballpark",
-              "AimedArrivalTime": "2023-05-28T17:06:06Z",
-              "ExpectedArrivalTime": "2023-05-28T17:24:16Z",
-              "AimedDepartureTime": "2023-05-28T17:06:06Z",
-              "ExpectedDepartureTime": null,
-              "Distances": ""
-            }
-          }
-        },
-        {
-          "RecordedAtTime": "1970-01-01T00:00:00Z",
-          "MonitoringRef": "13911",
-          "MonitoredVehicleJourney": {
-            "LineRef": "N",
-            "DirectionRef": "IB",
-            "FramedVehicleJourneyRef": {
-              "DataFrameRef": "2023-05-28",
-              "DatedVehicleJourneyRef": "11300633"
-            },
-            "PublishedLineName": "JUDAH",
-            "OperatorRef": "SF",
-            "OriginRef": "15223",
-            "OriginName": "Judah/La Playa/Ocean Beach",
-            "DestinationRef": "15239",
-            "DestinationName": "Caltrain/Ballpark",
-            "Monitored": true,
-            "InCongestion": null,
-            "VehicleLocation": {
-              "Longitude": "",
-              "Latitude": ""
-            },
-            "Bearing": null,
-            "Occupancy": null,
-            "VehicleRef": null,
-            "MonitoredCall": {
-              "StopPointRef": "13911",
-              "StopPointName": "Carl St & Cole St",
-              "VehicleLocationAtStop": "",
-              "VehicleAtStop": "",
-              "DestinationDisplay": "Caltrain/Ballpark",
-              "AimedArrivalTime": "2023-05-28T17:29:20Z",
-              "ExpectedArrivalTime": "2023-05-28T17:40:24Z",
-              "AimedDepartureTime": "2023-05-28T17:29:20Z",
-              "ExpectedDepartureTime": null,
-              "Distances": ""
-            }
-          }
-        }
-      ]
-    }
-  }
-}"###;
-    // TODO: Use heapless
-    // https://stackoverflow.com/questions/69976190/how-do-i-use-serde-json-core-to-deserialise-an-array-without-allocations
-    let v = serde_json::from_str::<serde_json::Value>(raw_str).unwrap();
+fn get_minutes_until_next_arrival(content: &String) -> i64 {
+    let v: serde_json::Value = serde_json::from_str(content).unwrap();
     let expected_arrival_time = v["ServiceDelivery"]["StopMonitoringDelivery"]
         ["MonitoredStopVisit"][0]["MonitoredVehicleJourney"]["MonitoredCall"]
         ["ExpectedArrivalTime"]
@@ -389,7 +281,9 @@ fn get_minutes_until_next_arrival() -> i64 {
         .unwrap();
 
     // TODO: Need to lookup and track walltime
-    let now = NaiveDateTime::parse_from_str("2023-05-28T16:30:00Z", "%+").unwrap();
+    let now_str = v["ServiceDelivery"]["ResponseTimestamp"].as_str().unwrap();
+    let now = NaiveDateTime::parse_from_str(now_str, "%+").unwrap();
+    // let now = NaiveDateTime::parse_from_str("2023-05-28T16:30:00Z", "%+").unwrap();
 
     NaiveDateTime::parse_from_str(expected_arrival_time, "%+")
         .unwrap()
@@ -405,8 +299,6 @@ fn main() -> ! {
         ALLOCATOR.init(heap_start as *mut u8, HEAP_SIZE);
     }
 
-    let next_arrival = get_minutes_until_next_arrival();
-
     let mut ctx = init();
 
     ctx.display.clear(TriColor::White).unwrap();
@@ -418,7 +310,7 @@ fn main() -> ! {
         .unwrap();
 
     Text::new(
-        format!("{} mins", next_arrival).as_str(),
+        format!("{} mins", ctx.next_arrival).as_str(),
         Point::new(5, 50),
         style,
     )
