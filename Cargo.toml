@@ -25,6 +25,7 @@ smart-leds = "0.3.0"
 serde_json = { version = "1.0.96", default-features = false, features = ["alloc"] }
 chrono = { version = "0.4.24", default-features = false }
 spin = "0.9.8"
+esp-alloc = "0.3.0"
 
 [profile.release]
 # https://github.com/esp-rs/esp-wifi/tree/f80df630a887b27fa63fb2043fd2a432d431ac2f#lto

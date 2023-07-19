@@ -5,7 +5,6 @@
 
 extern crate alloc;
 
-use alloc::alloc::{GlobalAlloc, Layout};
 use alloc::format;
 use chrono::NaiveDateTime;
 use embedded_graphics::{
@@ -41,44 +40,17 @@ use smart_leds::{
 use smoltcp::iface::SocketStorage;
 use smoltcp::wire::IpAddress;
 use smoltcp::wire::Ipv4Address;
-use spin::Mutex;
 
 // TODO: use env!()
 const SSID: Option<&str> = option_env!("SSID");
 const PASSWORD: Option<&str> = option_env!("PASSWORD");
 const API_KEY: Option<&str> = option_env!("API_KEY");
 
-// Implement a very bad bump allocator so we allocate memory
-struct BadAllocator {
-    next: Mutex<usize>,
-}
-impl BadAllocator {
-    const fn new() -> Self {
-        BadAllocator {
-            next: Mutex::new(0),
-        }
-    }
-}
 #[global_allocator]
-static ALLOCATOR: BadAllocator = BadAllocator::new();
-
-const BUFFER_SIZE: usize = 1024 * 64;
-static mut BUFFER: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
-unsafe impl GlobalAlloc for BadAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let mut next = self.next.lock();
-        let start = *next;
-        assert!(
-            start + layout.size() < BUFFER.len(),
-            "Overflow at {} bytes",
-            start + layout.size()
-        );
-        *next += layout.size();
-        BUFFER.as_mut_ptr().add(start)
-    }
-    // No we don't ever release memory :)
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
-}
+static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+// TODO: It seems that the symbol "_heap_start" is defined. Maybe that can help us.
+const HEAP_SIZE: usize = 1024 * 64;
+static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 type Spi<'a> = spi::Spi<'a, SPI2, spi::FullDuplexMode>;
 type CSPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 5>;
@@ -427,6 +399,12 @@ fn get_minutes_until_next_arrival() -> i64 {
 
 #[entry]
 fn main() -> ! {
+    // Initialize the heap
+    unsafe {
+        let heap_start = &HEAP as *const _ as usize;
+        ALLOCATOR.init(heap_start as *mut u8, HEAP_SIZE);
+    }
+
     let next_arrival = get_minutes_until_next_arrival();
 
     let mut ctx = init();
