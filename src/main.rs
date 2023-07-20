@@ -71,7 +71,7 @@ struct Context<'a> {
     epd: Epd<'a>,
     display: EPaperDisplay,
     led: Led<'a>,
-    next_arrival: i64,
+    next_arrivals: Vec<i64>,
 }
 
 fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> String {
@@ -217,8 +217,11 @@ fn init<'a>() -> Context<'a> {
     socket.disconnect();
     socket.work();
 
-    let next_arrival = get_minutes_until_next_arrival(&content);
-    println!("Next eastbound N: {} minutes", next_arrival);
+    let next_arrivals = get_minutes_until_next_arrivals(&content);
+    println!(
+        "Next eastbound N: {} minutes",
+        next_arrivals.first().unwrap()
+    );
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut delay = Delay::new(&clocks);
@@ -269,27 +272,35 @@ fn init<'a>() -> Context<'a> {
         epd,
         display,
         led,
-        next_arrival,
+        next_arrivals,
     }
 }
 
-fn get_minutes_until_next_arrival(content: &str) -> i64 {
+fn get_minutes_until_next_arrivals(content: &str) -> Vec<i64> {
     let v: serde_json::Value = serde_json::from_str(content).unwrap();
-    let expected_arrival_time = v["ServiceDelivery"]["StopMonitoringDelivery"]
-        ["MonitoredStopVisit"][0]["MonitoredVehicleJourney"]["MonitoredCall"]
-        ["ExpectedArrivalTime"]
-        .as_str()
-        .unwrap();
+    let expected_arrival_times = v["ServiceDelivery"]["StopMonitoringDelivery"]
+        ["MonitoredStopVisit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            v["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedArrivalTime"]
+                .as_str()
+                .unwrap()
+        });
 
     // TODO: Need to lookup and track walltime
     let now_str = v["ServiceDelivery"]["ResponseTimestamp"].as_str().unwrap();
     let now = NaiveDateTime::parse_from_str(now_str, "%+").unwrap();
-    // let now = NaiveDateTime::parse_from_str("2023-05-28T16:30:00Z", "%+").unwrap();
 
-    NaiveDateTime::parse_from_str(expected_arrival_time, "%+")
-        .unwrap()
-        .signed_duration_since(now)
-        .num_minutes()
+    expected_arrival_times
+        .map(|t| {
+            NaiveDateTime::parse_from_str(t, "%+")
+                .unwrap()
+                .signed_duration_since(now)
+                .num_minutes()
+        })
+        .collect()
 }
 
 #[entry]
@@ -311,7 +322,15 @@ fn main() -> ! {
         .unwrap();
 
     Text::new(
-        format!("{} mins", ctx.next_arrival).as_str(),
+        format!(
+            "{} mins",
+            ctx.next_arrivals
+                .iter()
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+        .as_str(),
         Point::new(5, 50),
         style,
     )
@@ -345,7 +364,7 @@ fn main() -> ! {
                 5,
             ))
             .unwrap();
-        ctx.delay.delay_ms(20u8);
+        ctx.delay.delay_ms(80u8);
     }
 
     ctx.display.clear(TriColor::White).unwrap();
