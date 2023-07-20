@@ -55,7 +55,7 @@ static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 type Spi<'a> = spi::Spi<'a, SPI2, spi::FullDuplexMode>;
 type CSPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 5>;
-type BusyPin = gpio::GpioPin<hal::gpio::Input<hal::gpio::Floating>, 4>;
+type BusyPin = gpio::GpioPin<gpio::Input<gpio::Floating>, 4>;
 type DCPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 17>;
 type RSTPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 16>;
 type Epd<'a> = Epd2in13b<Spi<'a>, CSPin, BusyPin, DCPin, RSTPin, Delay>;
