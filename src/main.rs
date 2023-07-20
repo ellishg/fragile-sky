@@ -244,7 +244,8 @@ fn init<'a>() -> Context<'a> {
 
     let epd = Epd2in13b::new(&mut spi, cs, busy, dc, rst, &mut delay, None).unwrap();
 
-    let display = Display2in13b::default();
+    let mut display = Display2in13b::default();
+    display.set_rotation(DisplayRotation::Rotate90);
 
     // Configure RMT peripheral globally
     let pulse = PulseControl::new(
@@ -328,6 +329,25 @@ fn main() -> ! {
         .unwrap();
     ctx.epd.display_frame(&mut ctx.spi, &mut ctx.delay).unwrap();
 
+    // TODO: Look into embassy_executor
+    for hue in 0..=255 {
+        let data = [hsv2rgb(Hsv {
+            hue,
+            sat: 255,
+            val: 255,
+        })];
+        // When sending to the LED, we do a gamma correction first (see smart_leds
+        // documentation for details) and then limit the brightness to 10 out of 255 so
+        // that the output it's not too bright.
+        ctx.led
+            .write(smart_leds::brightness(
+                smart_leds::gamma(data.iter().cloned()),
+                5,
+            ))
+            .unwrap();
+        ctx.delay.delay_ms(20u8);
+    }
+
     ctx.display.clear(TriColor::White).unwrap();
     ctx.epd
         .update_color_frame(
@@ -339,24 +359,5 @@ fn main() -> ! {
         .unwrap();
     ctx.epd.display_frame(&mut ctx.spi, &mut ctx.delay).unwrap();
 
-    // TODO: Look into embassy_executor
-    loop {
-        for hue in 0..=255 {
-            let data = [hsv2rgb(Hsv {
-                hue,
-                sat: 255,
-                val: 255,
-            })];
-            // When sending to the LED, we do a gamma correction first (see smart_leds
-            // documentation for details) and then limit the brightness to 10 out of 255 so
-            // that the output it's not too bright.
-            ctx.led
-                .write(smart_leds::brightness(
-                    smart_leds::gamma(data.iter().cloned()),
-                    5,
-                ))
-                .unwrap();
-            ctx.delay.delay_ms(20u8);
-        }
-    }
+    loop {}
 }
