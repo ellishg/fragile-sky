@@ -11,7 +11,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use chrono::NaiveDateTime;
 use embedded_graphics::{
-    mono_font::{ascii::FONT_6X13, MonoTextStyle},
+    mono_font::{
+        ascii::{FONT_9X15, FONT_9X15_BOLD},
+        MonoTextStyle,
+    },
     prelude::*,
     text::Text,
 };
@@ -71,7 +74,65 @@ struct Context<'a> {
     epd: Epd<'a>,
     display: EPaperDisplay,
     led: Led<'a>,
-    next_arrivals: Vec<i64>,
+    next_arrivals: Vec<(&'static str, Vec<i64>)>,
+}
+
+struct StopConfig {
+    stop_code: u16,
+    name: &'static str,
+}
+
+static STOP_CONFIGS: [StopConfig; 4] = [
+    StopConfig {
+        stop_code: 13911,
+        name: "N Eastbound",
+    },
+    StopConfig {
+        stop_code: 13909,
+        name: "N Westbound",
+    },
+    StopConfig {
+        stop_code: 14946,
+        name: "Hght&Clytn W",
+    },
+    StopConfig {
+        stop_code: 14947,
+        name: "Hght&Clytn E",
+    },
+];
+
+fn request_stop_code_info(
+    socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>,
+    stop_code: u16,
+) -> String {
+    // curl -X GET -v -I "http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=<STOP_CODE>"
+    println!("Making HTTP request");
+    socket.work();
+
+    // TODO: DNS lookup
+    socket
+        .open(IpAddress::Ipv4(Ipv4Address::new(52, 8, 155, 117)), 80)
+        .unwrap();
+
+    let get_request = format!(
+        concat!(
+            "GET /transit/StopMonitoring?api_key={}&agency=SF&format=json&stopcode={} HTTP/1.0\r\n",
+            "Host: api.511.org\r\n",
+            "Accept: application/json\r\n",
+            "Accept-Encoding: identity\r\n\r\n",
+        ),
+        API_KEY.unwrap(),
+        stop_code
+    );
+    socket.write(get_request.as_bytes()).unwrap();
+    socket.flush().unwrap();
+
+    let content = read_content(socket);
+
+    socket.disconnect();
+    socket.work();
+
+    content
 }
 
 fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> String {
@@ -196,32 +257,14 @@ fn init<'a>() -> Context<'a> {
     let mut tx_buffer = [0u8; 1536];
     let mut socket = wifi_stack.get_socket(&mut rx_buffer, &mut tx_buffer);
 
-    println!("Making HTTP request");
-    socket.work();
-
-    // http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=13911
-    // TODO: DNS lookup
-    socket
-        .open(IpAddress::Ipv4(Ipv4Address::new(52, 8, 155, 117)), 80)
-        .unwrap();
-
-    // curl -X GET -v -I "http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=13911"
-    socket
-        .write(format!("GET /transit/StopMonitoring?api_key={}&agency=SF&format=json&stopcode=13911 HTTP/1.0\r\nHost: api.511.org\r\nAccept: application/json\r\nAccept-Encoding: identity\r\n\r\n", API_KEY.unwrap()).as_bytes())
-        .unwrap();
-    socket.flush().unwrap();
-
-    let content = read_content(&mut socket);
-    // println!("{}", content);
-
-    socket.disconnect();
-    socket.work();
-
-    let next_arrivals = get_minutes_until_next_arrivals(&content);
-    println!(
-        "Next eastbound N: {} minutes",
-        next_arrivals.first().unwrap()
-    );
+    let next_arrivals = STOP_CONFIGS
+        .iter()
+        .map(|stop_config| {
+            let response = request_stop_code_info(&mut socket, stop_config.stop_code);
+            let next_arrivals = get_minutes_until_next_arrivals(&response);
+            (stop_config.name, next_arrivals)
+        })
+        .collect();
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut delay = Delay::new(&clocks);
@@ -315,27 +358,32 @@ fn main() -> ! {
 
     ctx.display.clear(TriColor::White).unwrap();
 
-    let style = MonoTextStyle::new(&FONT_6X13, TriColor::Chromatic);
+    let name_style = MonoTextStyle::new(&FONT_9X15_BOLD, TriColor::Black);
+    let style = MonoTextStyle::new(&FONT_9X15, TriColor::Chromatic);
 
-    Text::new("N Eastbound", Point::new(5, 30), style)
+    // This display is 122x250 px
+    for (i, (name, next_arrivals)) in ctx.next_arrivals.iter().enumerate() {
+        let i = i as i32;
+        let (x, y) = (i % 2, i / 2);
+        Text::new(name, Point::new(5 + x * 125, 15 + y * 45), name_style)
+            .draw(&mut ctx.display)
+            .unwrap();
+
+        // TODO: We should join bus names with times
+        let joined_next_arrivals = next_arrivals
+            .iter()
+            .take(3)
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        Text::new(
+            format!("{} mins", joined_next_arrivals).as_str(),
+            Point::new(5 + x * 125, 35 + y * 45),
+            style,
+        )
         .draw(&mut ctx.display)
         .unwrap();
-
-    Text::new(
-        format!(
-            "{} mins",
-            ctx.next_arrivals
-                .iter()
-                .map(|t| t.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-        .as_str(),
-        Point::new(5, 50),
-        style,
-    )
-    .draw(&mut ctx.display)
-    .unwrap();
+    }
 
     // TODO: Improve the speed of updating frames
     ctx.epd
