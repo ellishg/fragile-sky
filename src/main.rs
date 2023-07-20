@@ -359,5 +359,7 @@ fn main() -> ! {
         .unwrap();
     ctx.epd.display_frame(&mut ctx.spi, &mut ctx.delay).unwrap();
 
-    loop {}
+    loop {
+        ctx.delay.delay_ms(0xFFFFFFFFu32);
+    }
 }
