@@ -26,7 +26,6 @@ use epd_waveshare::{
     prelude::*,
 };
 use esp_backtrace as _;
-use esp_hal_smartled::SmartLedsAdapter;
 use esp_println::println;
 use esp_wifi::wifi::{utils::create_network_interface, WifiMode};
 use esp_wifi::wifi_interface::WifiStack;
@@ -35,13 +34,9 @@ use hal::{
     clock, gpio,
     peripherals::{Peripherals, SPI2},
     prelude::*,
-    pulse_control, spi,
+    spi,
     systimer::SystemTimer,
-    timer, Delay, PulseControl, Rtc, IO,
-};
-use smart_leds::{
-    hsv::{hsv2rgb, Hsv},
-    SmartLedsWrite,
+    timer, Delay, Rtc, IO,
 };
 use smoltcp::iface::SocketStorage;
 use smoltcp::wire::IpAddress;
@@ -65,15 +60,11 @@ type DCPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 17>;
 type RSTPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 16>;
 type Epd<'a> = Epd2in13b<Spi<'a>, CSPin, BusyPin, DCPin, RSTPin, Delay>;
 type EPaperDisplay = Display<122, 250, false, 8000, TriColor>;
-type LEDPin = gpio::GpioPin<hal::gpio::Unknown, 8>;
-type Led<'a> = SmartLedsAdapter<pulse_control::ConfiguredChannel0<'a, LEDPin>, 25>;
-
 struct Context<'a> {
     delay: Delay,
     spi: Spi<'a>,
     epd: Epd<'a>,
     display: EPaperDisplay,
-    led: Led<'a>,
     next_arrivals: Vec<(&'static str, Vec<i64>)>,
 }
 
@@ -293,28 +284,11 @@ fn init<'a>() -> Context<'a> {
     let mut display = Display2in13b::default();
     display.set_rotation(DisplayRotation::Rotate90);
 
-    // Configure RMT peripheral globally
-    let pulse = PulseControl::new(
-        peripherals.RMT,
-        &mut system.peripheral_clock_control,
-        pulse_control::ClockSource::APB,
-        0,
-        0,
-        0,
-    )
-    .unwrap();
-
-    // We use one of the RMT channels to instantiate a `SmartLedsAdapter` which can
-    // be used directly with all `smart_led` implementations
-    // FIXME: We could use <smartLedAdapter!(1)>::new(...) but this confuses rust-analyzer
-    let led = SmartLedsAdapter::<_, 25>::new(pulse.channel0, io.pins.gpio8);
-
     Context {
         delay,
         spi,
         epd,
         display,
-        led,
         next_arrivals,
     }
 }
@@ -396,24 +370,7 @@ fn main() -> ! {
         .unwrap();
     ctx.epd.display_frame(&mut ctx.spi, &mut ctx.delay).unwrap();
 
-    // TODO: Look into embassy_executor
-    for hue in 0..=255 {
-        let data = [hsv2rgb(Hsv {
-            hue,
-            sat: 255,
-            val: 255,
-        })];
-        // When sending to the LED, we do a gamma correction first (see smart_leds
-        // documentation for details) and then limit the brightness to 10 out of 255 so
-        // that the output it's not too bright.
-        ctx.led
-            .write(smart_leds::brightness(
-                smart_leds::gamma(data.iter().cloned()),
-                5,
-            ))
-            .unwrap();
-        ctx.delay.delay_ms(80u8);
-    }
+    ctx.delay.delay_ms(30000u16);
 
     ctx.display.clear(TriColor::White).unwrap();
     ctx.epd

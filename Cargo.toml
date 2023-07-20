@@ -12,7 +12,6 @@ license = "MIT"
 hal = { package = "esp32c6-hal", version = "0.3.0" }
 esp-backtrace = { version = "0.7.0", features = ["esp32c6", "panic-handler", "exception-handler", "print-uart"] }
 esp-println = { version = "0.5.0", features = ["esp32c6"] }
-esp-hal-smartled = { version = "0.3.0", features = ["esp32c6"] }
 # esp-wifi = { git = "https://github.com/esp-rs/esp-wifi.git", features = ["esp32c6", "embedded-svc", "wifi"] }
 esp-wifi = { git = "https://github.com/ellishg/esp-wifi.git", branch = "floor-hack", features = ["esp32c6", "embedded-svc", "wifi"] }
 httparse = { version = "1.8.0", default-features = false, features = [] }
@@ -22,10 +21,8 @@ embedded-graphics = "0.7.1"
 embedded-svc = { version = "0.25.1", default-features = false, features = [] }
 embedded-io = "0.4.0"
 smoltcp = { version = "0.10.0", default-features=false, features = ["proto-igmp", "proto-ipv4", "socket-tcp", "socket-icmp", "socket-udp", "medium-ethernet", "proto-dhcpv4", "socket-raw", "socket-dhcpv4"] }
-smart-leds = "0.3.0"
 serde_json = { version = "1.0.103", default-features = false, features = ["alloc"] }
 chrono = { version = "0.4.24", default-features = false }
-spin = "0.9.8"
 esp-alloc = "0.3.0"
 
 [profile.release]
