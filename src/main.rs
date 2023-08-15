@@ -39,8 +39,7 @@ use hal::{
     timer, Delay, Rtc, IO,
 };
 use smoltcp::iface::SocketStorage;
-use smoltcp::wire::IpAddress;
-use smoltcp::wire::Ipv4Address;
+use smoltcp::wire::{DnsQueryType, IpAddress, Ipv4Address};
 
 // TODO: use env!()
 const SSID: Option<&str> = option_env!("SSID");
@@ -94,16 +93,14 @@ static STOP_CONFIGS: [StopConfig; 4] = [
 
 fn request_stop_code_info(
     socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>,
+    api_ip_address: IpAddress,
     stop_code: u16,
 ) -> String {
     // curl -X GET -v -I "http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=<STOP_CODE>"
     println!("Making HTTP request");
     socket.work();
 
-    // TODO: DNS lookup
-    socket
-        .open(IpAddress::Ipv4(Ipv4Address::new(52, 8, 155, 117)), 80)
-        .unwrap();
+    socket.open(api_ip_address, 80).unwrap();
 
     let get_request = format!(
         concat!(
@@ -196,8 +193,10 @@ fn init<'a>() -> Context<'a> {
     let (wifi, _, _) = peripherals.RADIO.split();
     let mut socket_set_entries: [SocketStorage; 3] = Default::default();
     let (iface, device, mut controller, sockets) =
-        create_network_interface(&init, wifi, WifiMode::Sta, &mut socket_set_entries);
+        create_network_interface(&init, wifi, WifiMode::Sta, &mut socket_set_entries).unwrap();
     let wifi_stack = WifiStack::new(iface, device, sockets, current_millis);
+    let mut query_storage: [_; 1] = Default::default();
+    wifi_stack.configure_dns(&[Ipv4Address::new(8, 8, 8, 8).into()], &mut query_storage);
 
     let client_config = Configuration::Client(ClientConfiguration {
         ssid: SSID.unwrap().into(),
@@ -238,7 +237,7 @@ fn init<'a>() -> Context<'a> {
         wifi_stack.work();
 
         if wifi_stack.is_iface_up() {
-            println!("got ip {:?}", wifi_stack.get_ip_info());
+            println!("{:?}", wifi_stack.get_ip_info().unwrap());
             break;
         }
     }
@@ -248,10 +247,16 @@ fn init<'a>() -> Context<'a> {
     let mut tx_buffer = [0u8; 1536];
     let mut socket = wifi_stack.get_socket(&mut rx_buffer, &mut tx_buffer);
 
+    let api_ip_address = wifi_stack
+        .dns_query("api.511.org", DnsQueryType::A)
+        .unwrap()[0];
+    println!("Found ip address for api.511.org: {}", api_ip_address);
+
     let next_arrivals = STOP_CONFIGS
         .iter()
         .map(|stop_config| {
-            let response = request_stop_code_info(&mut socket, stop_config.stop_code);
+            let response =
+                request_stop_code_info(&mut socket, api_ip_address, stop_config.stop_code);
             let next_arrivals = get_minutes_until_next_arrivals(&response);
             (stop_config.name, next_arrivals)
         })
