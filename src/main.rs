@@ -22,7 +22,7 @@ use embedded_io::blocking::*;
 use embedded_svc::ipv4::Interface;
 use embedded_svc::wifi::{ClientConfiguration, Configuration, Wifi};
 use epd_waveshare::{
-    epd2in13b_v4::{Display2in13b, Epd2in13b},
+    epd2in13_v2::{Display2in13, Epd2in13},
     prelude::*,
 };
 use esp_backtrace as _;
@@ -57,14 +57,13 @@ type CSPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 5>;
 type BusyPin = gpio::GpioPin<gpio::Input<gpio::Floating>, 4>;
 type DCPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 17>;
 type RSTPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 16>;
-type Epd<'a> = Epd2in13b<Spi<'a>, CSPin, BusyPin, DCPin, RSTPin, Delay>;
-type EPaperDisplay = Display<122, 250, false, 8000, TriColor>;
+type Epd<'a> = Epd2in13<Spi<'a>, CSPin, BusyPin, DCPin, RSTPin, Delay>;
 struct Context<'a> {
     delay: Delay,
     spi: Spi<'a>,
     epd: Epd<'a>,
-    display: EPaperDisplay,
-    next_arrivals: Vec<(&'static str, Vec<i64>)>,
+    display: Display2in13,
+    next_arrivals: Vec<(&'static str, Vec<u64>)>,
 }
 
 struct StopConfig {
@@ -284,9 +283,9 @@ fn init<'a>() -> Context<'a> {
     let dc = io.pins.gpio17.into_push_pull_output();
     let rst = io.pins.gpio16.into_push_pull_output();
 
-    let epd = Epd2in13b::new(&mut spi, cs, busy, dc, rst, &mut delay, None).unwrap();
+    let epd = Epd2in13::new(&mut spi, cs, busy, dc, rst, &mut delay, None).unwrap();
 
-    let mut display = Display2in13b::default();
+    let mut display = Display2in13::default();
     display.set_rotation(DisplayRotation::Rotate90);
 
     Context {
@@ -298,7 +297,7 @@ fn init<'a>() -> Context<'a> {
     }
 }
 
-fn get_minutes_until_next_arrivals(content: &str) -> Vec<i64> {
+fn get_minutes_until_next_arrivals(content: &str) -> Vec<u64> {
     let v: serde_json::Value = serde_json::from_str(content).unwrap();
     let expected_arrival_times = v["ServiceDelivery"]["StopMonitoringDelivery"]
         ["MonitoredStopVisit"]
@@ -320,9 +319,41 @@ fn get_minutes_until_next_arrivals(content: &str) -> Vec<i64> {
             NaiveDateTime::parse_from_str(t, "%+")
                 .unwrap()
                 .signed_duration_since(now)
-                .num_minutes()
+                .num_minutes() as u64
         })
         .collect()
+}
+
+fn draw_next_arrivals(ctx: &mut Context) {
+    ctx.display.clear(Color::White).unwrap();
+
+    let name_style = MonoTextStyle::new(&FONT_9X15_BOLD, Color::Black);
+    let style = MonoTextStyle::new(&FONT_9X15, Color::Black);
+
+    // This display is 122x250 px
+    for (i, (name, next_arrivals)) in ctx.next_arrivals.iter().enumerate() {
+        let i = i as i32;
+        let (x, y) = (i % 2, i / 2);
+        Text::new(name, Point::new(5 + x * 125, 15 + y * 45), name_style)
+            .draw(&mut ctx.display)
+            .unwrap();
+
+        if !next_arrivals.is_empty() {
+            let joined_next_arrivals = next_arrivals
+                .iter()
+                .take(3)
+                .map(|t| t.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            Text::new(
+                format!("{} mins", joined_next_arrivals).as_str(),
+                Point::new(5 + x * 125, 35 + y * 45),
+                style,
+            )
+            .draw(&mut ctx.display)
+            .unwrap();
+        }
+    }
 }
 
 #[entry]
@@ -335,58 +366,37 @@ fn main() -> ! {
 
     let mut ctx = init();
 
-    ctx.display.clear(TriColor::White).unwrap();
-
-    let name_style = MonoTextStyle::new(&FONT_9X15_BOLD, TriColor::Black);
-    let style = MonoTextStyle::new(&FONT_9X15, TriColor::Chromatic);
-
-    // This display is 122x250 px
-    for (i, (name, next_arrivals)) in ctx.next_arrivals.iter().enumerate() {
-        let i = i as i32;
-        let (x, y) = (i % 2, i / 2);
-        Text::new(name, Point::new(5 + x * 125, 15 + y * 45), name_style)
-            .draw(&mut ctx.display)
+    ctx.epd
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)
+        .unwrap();
+    for _ in 0..10 {
+        draw_next_arrivals(&mut ctx);
+        ctx.epd
+            .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)
             .unwrap();
 
-        // TODO: We should join bus names with times
-        let joined_next_arrivals = next_arrivals
-            .iter()
-            .take(3)
-            .map(|t| t.to_string())
-            .collect::<Vec<_>>()
-            .join(",");
-        Text::new(
-            format!("{} mins", joined_next_arrivals).as_str(),
-            Point::new(5 + x * 125, 35 + y * 45),
-            style,
-        )
-        .draw(&mut ctx.display)
-        .unwrap();
+        // Delay for a minute and update the arrival times
+        // TODO: Periodically fetch new arrival times
+        ctx.delay.delay_ms(60_000u16);
+        for i in 0..ctx.next_arrivals.len() {
+            ctx.next_arrivals[i].1 = ctx.next_arrivals[i]
+                .1
+                .iter()
+                .filter_map(|time| time.checked_sub(1))
+                .collect();
+        }
+        ctx.epd
+            .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)
+            .unwrap();
     }
 
-    // TODO: Improve the speed of updating frames
+    ctx.display.clear(Color::White).unwrap();
     ctx.epd
-        .update_color_frame(
-            &mut ctx.spi,
-            &mut ctx.delay,
-            ctx.display.bw_buffer(),
-            ctx.display.chromatic_buffer(),
-        )
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)
         .unwrap();
-    ctx.epd.display_frame(&mut ctx.spi, &mut ctx.delay).unwrap();
-
-    ctx.delay.delay_ms(30000u16);
-
-    ctx.display.clear(TriColor::White).unwrap();
     ctx.epd
-        .update_color_frame(
-            &mut ctx.spi,
-            &mut ctx.delay,
-            ctx.display.bw_buffer(),
-            ctx.display.chromatic_buffer(),
-        )
+        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)
         .unwrap();
-    ctx.epd.display_frame(&mut ctx.spi, &mut ctx.delay).unwrap();
 
     loop {
         ctx.delay.delay_ms(0xFFFFFFFFu32);

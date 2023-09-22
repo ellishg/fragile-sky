@@ -1,5 +1,5 @@
 # fragile-sky
-Display SF MUNI transit times on an epd2in13b_v4 e-ink display with an esp32c6 board
+Display SF MUNI transit times on an epd2in13 e-ink display with an esp32c6 board
 
 [![Rust](https://github.com/ellishg/fragile-sky/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/ellishg/fragile-sky/actions/workflows/build.yml)
 
@@ -38,7 +38,7 @@ cargo flash --monitor
   * https://github.com/esp-rs/esp-wifi/blob/main/examples-esp32c6/examples/dhcp.rs
 * esp32c6-hal docs
   * https://docs.rs/esp32c6-hal/latest/esp32c6_hal/index.html
-* epd2in13b manual
-  * https://www.waveshare.com/wiki/2.13inch_e-Paper_HAT_(B)_Manual
+* epd2in13 manual
+  * https://www.waveshare.com/wiki/2.13inch_e-Paper_HAT_Manual
 * epd-waveshare docs
   * https://docs.rs/epd-waveshare/latest/epd_waveshare/index.html

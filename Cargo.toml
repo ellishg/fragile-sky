@@ -15,8 +15,7 @@ esp-println = { version = "0.5.0", features = ["esp32c6"] }
 # esp-wifi = { git = "https://github.com/esp-rs/esp-wifi.git", features = ["esp32c6", "embedded-svc", "wifi"] }
 esp-wifi = { git = "https://github.com/ellishg/esp-wifi.git", branch = "floor-hack", features = ["esp32c6", "embedded-svc", "wifi"] }
 httparse = { version = "1.8.0", default-features = false, features = [] }
-# https://github.com/caemor/epd-waveshare/pull/145
-epd-waveshare = { git = "https://github.com/tomgilligan/epd-waveshare.git", branch ="epd2in13b_v4" }
+epd-waveshare = { git = "https://github.com/caemor/epd-waveshare.git", rev = "97425d5a5b7798b73c52e258a958309f017fa010" }
 embedded-graphics = "0.7.1"
 embedded-svc = { version = "0.25.1", default-features = false, features = [] }
 embedded-io = "0.4.0"
@@ -32,7 +31,6 @@ lto = "off"
 [profile.dev]
 # https://github.com/esp-rs/esp-wifi/tree/f80df630a887b27fa63fb2043fd2a432d431ac2f#lto
 lto = "off"
-
 
 # https://github.com/esp-rs/esp-wifi/tree/f80df630a887b27fa63fb2043fd2a432d431ac2f#optimization-level
 [profile.release.package.esp-wifi]
