@@ -12,8 +12,7 @@ license = "MIT"
 hal = { package = "esp32c6-hal", version = "0.5.0" }
 esp-backtrace = { version = "0.7.0", features = ["esp32c6", "panic-handler", "exception-handler", "print-uart"] }
 esp-println = { version = "0.5.0", features = ["esp32c6"] }
-# esp-wifi = { git = "https://github.com/esp-rs/esp-wifi.git", features = ["esp32c6", "embedded-svc", "wifi"] }
-esp-wifi = { git = "https://github.com/ellishg/esp-wifi.git", branch = "floor-libm", features = ["esp32c6", "embedded-svc", "wifi"] }
+esp-wifi = { git = "https://github.com/esp-rs/esp-wifi.git", rev="16afb0fe3c46e2ccf698bf52bfec5230ffad1cad", features = ["esp32c6", "embedded-svc", "wifi"] }
 httparse = { version = "1.8.0", default-features = false, features = [] }
 epd-waveshare = { git = "https://github.com/caemor/epd-waveshare.git", rev = "97425d5a5b7798b73c52e258a958309f017fa010" }
 embedded-graphics = "0.7.1"
