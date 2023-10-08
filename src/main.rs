@@ -407,5 +407,6 @@ fn run() -> Result<()> {
 #[entry]
 fn main() -> ! {
     run().unwrap();
+    #[allow(clippy::empty_loop)]
     loop {}
 }
