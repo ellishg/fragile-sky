@@ -41,10 +41,9 @@ use hal::{
 use smoltcp::iface::SocketStorage;
 use smoltcp::wire::{DnsQueryType, IpAddress, Ipv4Address};
 
-// TODO: use env!()
-const SSID: Option<&str> = option_env!("SSID");
-const PASSWORD: Option<&str> = option_env!("PASSWORD");
-const API_KEY: Option<&str> = option_env!("API_KEY");
+const SSID: &str = env!("SSID");
+const PASSWORD: &str = env!("PASSWORD");
+const API_KEY: &str = env!("API_KEY");
 
 #[global_allocator]
 static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
@@ -108,8 +107,7 @@ fn request_stop_code_info(
             "Accept: application/json\r\n",
             "Accept-Encoding: identity\r\n\r\n",
         ),
-        API_KEY.unwrap(),
-        stop_code
+        API_KEY, stop_code
     );
     socket.write(get_request.as_bytes()).unwrap();
     socket.flush().unwrap();
@@ -198,8 +196,8 @@ fn init<'a>() -> Context<'a> {
     wifi_stack.configure_dns(&[Ipv4Address::new(8, 8, 8, 8).into()], &mut query_storage);
 
     let client_config = Configuration::Client(ClientConfiguration {
-        ssid: SSID.unwrap().into(),
-        password: PASSWORD.unwrap().into(),
+        ssid: SSID.into(),
+        password: PASSWORD.into(),
         ..Default::default()
     });
 

@@ -3,5 +3,10 @@
     "rust-analyzer.check.extraArgs": [
         "--target",
         "riscv32imac-unknown-none-elf",
-    ]
+    ],
+    "rust-analyzer.cargo.extraEnv": {
+        "SSID": "ssid",
+        "PASSWORD": "password",
+        "API_KEY": "1111-2222-3333"
+    }
 }

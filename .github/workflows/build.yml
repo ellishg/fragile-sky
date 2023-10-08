@@ -8,6 +8,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  SSID: ssid
+  PASSWORD: password
+  API_KEY: 1111-2222-3333
 
 jobs:
   build:
