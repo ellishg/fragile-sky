@@ -18,9 +18,11 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
-use embedded_io::blocking::*;
-use embedded_svc::ipv4::Interface;
-use embedded_svc::wifi::{ClientConfiguration, Configuration, Wifi};
+use embedded_svc::{
+    io::{Read, Write},
+    ipv4::Interface,
+    wifi::{ClientConfiguration, Configuration, Wifi},
+};
 use epd_waveshare::{
     epd2in13_v2::{Display2in13, Epd2in13},
     prelude::*,
