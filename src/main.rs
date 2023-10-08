@@ -28,6 +28,7 @@ use epd_waveshare::{
     epd2in13_v2::{Display2in13, Epd2in13},
     prelude::*,
 };
+// TODO: Backtrace does not work
 use esp_backtrace as _;
 use esp_println::println;
 use esp_wifi::wifi::{utils::create_network_interface, WifiMode};
@@ -170,7 +171,6 @@ fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> Result
     }
 }
 
-// TODO: Return result type
 fn init<'a>() -> Result<Context<'a>> {
     let peripherals = Peripherals::take();
     let mut system = peripherals.PCR.split();
