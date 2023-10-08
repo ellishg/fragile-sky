@@ -21,6 +21,8 @@ smoltcp = { version = "0.10.0", default-features=false, features = ["proto-igmp"
 serde_json = { version = "1.0.103", default-features = false, features = ["alloc"] }
 chrono = { version = "0.4.24", default-features = false }
 esp-alloc = "0.3.0"
+thiserror-no-std = "2.0.2"
+anyhow = { version = "1.0.75", default-features = false }
 
 [profile.release]
 # https://github.com/esp-rs/esp-wifi/tree/f80df630a887b27fa63fb2043fd2a432d431ac2f#lto

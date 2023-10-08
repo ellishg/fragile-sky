@@ -9,6 +9,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use alloc::vec::Vec;
+use anyhow::anyhow;
 use chrono::NaiveDateTime;
 use embedded_graphics::{
     mono_font::{
@@ -42,6 +43,23 @@ use hal::{
 };
 use smoltcp::iface::SocketStorage;
 use smoltcp::wire::{DnsQueryType, IpAddress, Ipv4Address};
+use thiserror_no_std::Error;
+
+#[derive(Error, Debug)]
+enum MyError {
+    Infallible(#[from] core::convert::Infallible),
+    Utf8Error(#[from] core::str::Utf8Error),
+    SpiError(#[from] hal::spi::Error),
+    EspWifiInitializationError(#[from] esp_wifi::InitializationError),
+    EspWifiIoError(#[from] esp_wifi::wifi_interface::IoError),
+    EspWifiWifiError(#[from] esp_wifi::wifi::WifiError),
+    EspWifiWifiStackError(#[from] esp_wifi::wifi_interface::WifiStackError),
+    ChronoParseError(#[from] chrono::ParseError),
+    SerdeJsonError(#[from] serde_json::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+type Result<T> = core::result::Result<T, MyError>;
 
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
@@ -95,12 +113,12 @@ fn request_stop_code_info(
     socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>,
     api_ip_address: IpAddress,
     stop_code: u16,
-) -> String {
+) -> Result<String> {
     // curl -X GET -v -I "http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=<STOP_CODE>"
     println!("Making HTTP request");
     socket.work();
 
-    socket.open(api_ip_address, 80).unwrap();
+    socket.open(api_ip_address, 80)?;
 
     let get_request = format!(
         concat!(
@@ -111,18 +129,18 @@ fn request_stop_code_info(
         ),
         API_KEY, stop_code
     );
-    socket.write(get_request.as_bytes()).unwrap();
-    socket.flush().unwrap();
+    socket.write(get_request.as_bytes())?;
+    socket.flush()?;
 
-    let content = read_content(socket);
+    let content = read_content(socket)?;
 
     socket.disconnect();
     socket.work();
 
-    content
+    Ok(content)
 }
 
-fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> String {
+fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> Result<String> {
     let mut buffer: Vec<u8> = vec![];
     loop {
         let mut chunk = [0u8; 1024];
@@ -136,25 +154,24 @@ fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> String
                 // TODO: I'm not sure if this is needed to guarantee the content is complete
                 // for header in response.headers.iter() {
                 //     if header.name == "Content-Length" {
-                //         let value = core::str::from_utf8(header.value).unwrap();
-                //         let expected_content_length: usize = value.parse().unwrap();
+                //         let value = core::str::from_utf8(header.value)?;
+                //         let expected_content_length: usize = value.parse()?;
                 //         if content.len() >= expected_content_length {
-                //             return core::str::from_utf8(content).unwrap().to_string();
+                //             return core::str::from_utf8(content)?.to_string();
                 //         }
                 //     }
                 // }
-                return core::str::from_utf8(content)
-                    .unwrap()
+                return Ok(core::str::from_utf8(content)?
                     // TODO: I'm not sure why, but the content is prefixed with "ï»¿"
                     .replace(|c: char| !c.is_ascii(), "")
-                    .to_string();
+                    .to_string());
             }
         }
     }
 }
 
 // TODO: Return result type
-fn init<'a>() -> Context<'a> {
+fn init<'a>() -> Result<Context<'a>> {
     let peripherals = Peripherals::take();
     let mut system = peripherals.PCR.split();
     let clocks =
@@ -186,13 +203,12 @@ fn init<'a>() -> Context<'a> {
         hal::Rng::new(peripherals.RNG),
         system.radio_clock_control,
         &clocks,
-    )
-    .unwrap();
+    )?;
 
     let (wifi, _, _) = peripherals.RADIO.split();
     let mut socket_set_entries: [SocketStorage; 3] = Default::default();
     let (iface, device, mut controller, sockets) =
-        create_network_interface(&init, wifi, WifiMode::Sta, &mut socket_set_entries).unwrap();
+        create_network_interface(&init, wifi, WifiMode::Sta, &mut socket_set_entries)?;
     let wifi_stack = WifiStack::new(iface, device, sockets, current_millis);
     let mut query_storage: [_; 1] = Default::default();
     wifi_stack.configure_dns(&[Ipv4Address::new(8, 8, 8, 8).into()], &mut query_storage);
@@ -206,7 +222,7 @@ fn init<'a>() -> Context<'a> {
     let res = controller.set_configuration(&client_config);
     println!("wifi_set_configuration returned {:?}", res);
 
-    controller.start().unwrap();
+    controller.start()?;
     println!("is wifi started: {:?}", controller.is_started());
 
     println!("{:?}", controller.get_capabilities());
@@ -236,7 +252,7 @@ fn init<'a>() -> Context<'a> {
         wifi_stack.work();
 
         if wifi_stack.is_iface_up() {
-            println!("{:?}", wifi_stack.get_ip_info().unwrap());
+            println!("{:?}", wifi_stack.get_ip_info()?);
             break;
         }
     }
@@ -246,20 +262,18 @@ fn init<'a>() -> Context<'a> {
     let mut tx_buffer = [0u8; 1536];
     let mut socket = wifi_stack.get_socket(&mut rx_buffer, &mut tx_buffer);
 
-    let api_ip_address = wifi_stack
-        .dns_query("api.511.org", DnsQueryType::A)
-        .unwrap()[0];
+    let api_ip_address = wifi_stack.dns_query("api.511.org", DnsQueryType::A)?[0];
     println!("Found ip address for api.511.org: {}", api_ip_address);
 
     let next_arrivals = STOP_CONFIGS
         .iter()
         .map(|stop_config| {
             let response =
-                request_stop_code_info(&mut socket, api_ip_address, stop_config.stop_code);
-            let next_arrivals = get_minutes_until_next_arrivals(&response);
-            (stop_config.name, next_arrivals)
+                request_stop_code_info(&mut socket, api_ip_address, stop_config.stop_code)?;
+            let next_arrivals = get_minutes_until_next_arrivals(&response)?;
+            Ok((stop_config.name, next_arrivals))
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
     let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
     let mut delay = Delay::new(&clocks);
@@ -283,49 +297,47 @@ fn init<'a>() -> Context<'a> {
     let dc = io.pins.gpio17.into_push_pull_output();
     let rst = io.pins.gpio16.into_push_pull_output();
 
-    let epd = Epd2in13::new(&mut spi, cs, busy, dc, rst, &mut delay, None).unwrap();
+    let epd = Epd2in13::new(&mut spi, cs, busy, dc, rst, &mut delay, None)?;
 
     let mut display = Display2in13::default();
     display.set_rotation(DisplayRotation::Rotate90);
 
-    Context {
+    Ok(Context {
         delay,
         spi,
         epd,
         display,
         next_arrivals,
-    }
+    })
 }
 
-fn get_minutes_until_next_arrivals(content: &str) -> Vec<u64> {
-    let v: serde_json::Value = serde_json::from_str(content).unwrap();
-    let expected_arrival_times = v["ServiceDelivery"]["StopMonitoringDelivery"]
-        ["MonitoredStopVisit"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| {
-            v["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedArrivalTime"]
-                .as_str()
-                .unwrap()
-        });
+fn get_minutes_until_next_arrivals(content: &str) -> Result<Vec<u64>> {
+    let v: serde_json::Value = serde_json::from_str(content)?;
 
     // TODO: Need to lookup and track walltime
-    let now_str = v["ServiceDelivery"]["ResponseTimestamp"].as_str().unwrap();
-    let now = NaiveDateTime::parse_from_str(now_str, "%+").unwrap();
+    let now_str = v["ServiceDelivery"]["ResponseTimestamp"]
+        .as_str()
+        .ok_or(anyhow!("ResponseTimestamp not found in response"))?;
+    let now = NaiveDateTime::parse_from_str(now_str, "%+")?;
 
-    expected_arrival_times
-        .map(|t| {
-            NaiveDateTime::parse_from_str(t, "%+")
-                .unwrap()
+    v["ServiceDelivery"]["StopMonitoringDelivery"]["MonitoredStopVisit"]
+        .as_array()
+        .ok_or(anyhow!("MonitoredStopVisit expected to be an array"))?
+        .iter()
+        .map(|v| {
+            let arrival_time = v["MonitoredVehicleJourney"]["MonitoredCall"]["ExpectedArrivalTime"]
+                .as_str()
+                .ok_or(anyhow!("ExpectedArrivalTime expected to be a string"))?;
+            let parsed_arrival_time = NaiveDateTime::parse_from_str(arrival_time, "%+")?
                 .signed_duration_since(now)
-                .num_minutes() as u64
+                .num_minutes() as u64;
+            Ok(parsed_arrival_time)
         })
         .collect()
 }
 
-fn draw_next_arrivals(ctx: &mut Context) {
-    ctx.display.clear(Color::White).unwrap();
+fn draw_next_arrivals(ctx: &mut Context) -> Result<()> {
+    ctx.display.clear(Color::White)?;
 
     let name_style = MonoTextStyle::new(&FONT_9X15_BOLD, Color::Black);
     let style = MonoTextStyle::new(&FONT_9X15, Color::Black);
@@ -334,9 +346,7 @@ fn draw_next_arrivals(ctx: &mut Context) {
     for (i, (name, next_arrivals)) in ctx.next_arrivals.iter().enumerate() {
         let i = i as i32;
         let (x, y) = (i % 2, i / 2);
-        Text::new(name, Point::new(5 + x * 125, 15 + y * 45), name_style)
-            .draw(&mut ctx.display)
-            .unwrap();
+        Text::new(name, Point::new(5 + x * 125, 15 + y * 45), name_style).draw(&mut ctx.display)?;
 
         if !next_arrivals.is_empty() {
             let joined_next_arrivals = next_arrivals
@@ -350,30 +360,27 @@ fn draw_next_arrivals(ctx: &mut Context) {
                 Point::new(5 + x * 125, 35 + y * 45),
                 style,
             )
-            .draw(&mut ctx.display)
-            .unwrap();
+            .draw(&mut ctx.display)?;
         }
     }
+    Ok(())
 }
 
-#[entry]
-fn main() -> ! {
+fn run() -> Result<()> {
     // Initialize the heap
     unsafe {
         let heap_start = &HEAP as *const _ as usize;
         ALLOCATOR.init(heap_start as *mut u8, HEAP_SIZE);
     }
 
-    let mut ctx = init();
+    let mut ctx = init()?;
 
     ctx.epd
-        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)
-        .unwrap();
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
     for _ in 0..10 {
-        draw_next_arrivals(&mut ctx);
+        draw_next_arrivals(&mut ctx)?;
         ctx.epd
-            .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)
-            .unwrap();
+            .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
 
         // Delay for a minute and update the arrival times
         // TODO: Periodically fetch new arrival times
@@ -386,19 +393,19 @@ fn main() -> ! {
                 .collect();
         }
         ctx.epd
-            .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)
-            .unwrap();
+            .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)?;
     }
 
-    ctx.display.clear(Color::White).unwrap();
+    ctx.display.clear(Color::White)?;
     ctx.epd
-        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)
-        .unwrap();
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
     ctx.epd
-        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)
-        .unwrap();
+        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
+    Ok(())
+}
 
-    loop {
-        ctx.delay.delay_ms(0xFFFFFFFFu32);
-    }
+#[entry]
+fn main() -> ! {
+    run().unwrap();
+    loop {}
 }
