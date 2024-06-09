@@ -11,6 +11,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use anyhow::anyhow;
 use chrono::NaiveDateTime;
+use core::ptr::addr_of;
 use embedded_graphics::{
     mono_font::{
         ascii::{FONT_9X15, FONT_9X15_BOLD},
@@ -47,6 +48,7 @@ use smoltcp::wire::{DnsQueryType, IpAddress, Ipv4Address};
 use thiserror_no_std::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 enum MyError {
     Infallible(#[from] core::convert::Infallible),
     Utf8Error(#[from] core::str::Utf8Error),
@@ -369,7 +371,7 @@ fn draw_next_arrivals(ctx: &mut Context) -> Result<()> {
 fn run() -> Result<()> {
     // Initialize the heap
     unsafe {
-        let heap_start = &HEAP as *const _ as usize;
+        let heap_start = addr_of!(HEAP) as *const _ as usize;
         ALLOCATOR.init(heap_start as *mut u8, HEAP_SIZE);
     }
 
