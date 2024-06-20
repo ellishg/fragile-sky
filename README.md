@@ -25,6 +25,11 @@ Display SF MUNI transit times on an epd2in13 e-ink display with an esp32c6 board
 ```
 
 ## Flashing
+Install `cargo-espflash`.
+```
+cargo install cargo-espflash
+```
+
 Connect to the board via the UART port.
 ```
 cargo flash --monitor
