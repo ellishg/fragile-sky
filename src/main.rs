@@ -74,7 +74,7 @@ const API_KEY: &str = env!("API_KEY");
 #[global_allocator]
 static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 // TODO: It seems that the symbol "_heap_start" is defined. Maybe that can help us.
-const HEAP_SIZE: usize = 1024 * 64;
+const HEAP_SIZE: usize = 128 * 1024;
 static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
 type SpiT<'a> =
