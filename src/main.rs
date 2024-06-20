@@ -13,6 +13,7 @@ use anyhow::anyhow;
 use chrono::NaiveDateTime;
 use core::ptr::addr_of;
 use embedded_graphics::{
+    draw_target::DrawTarget,
     mono_font::{
         ascii::{FONT_9X15, FONT_9X15_BOLD},
         MonoTextStyle,
@@ -20,29 +21,31 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
-use embedded_svc::{
-    io::{Read, Write},
-    ipv4::Interface,
-    wifi::{ClientConfiguration, Configuration, Wifi},
-};
+use embedded_svc::io::{Read, Write};
 use epd_waveshare::{
+    color::*,
     epd2in13_v2::{Display2in13, Epd2in13},
     prelude::*,
 };
+use esp_hal::clock::ClockControl;
 // TODO: Backtrace does not work
 use esp_backtrace as _;
-use esp_println::println;
-use esp_wifi::wifi::{utils::create_network_interface, WifiMode};
-use esp_wifi::wifi_interface::WifiStack;
-use esp_wifi::{current_millis, EspWifiInitFor};
-use hal::{
-    clock, gpio,
+use esp_hal::{
+    delay::Delay,
+    gpio,
     peripherals::{Peripherals, SPI2},
     prelude::*,
-    spi,
-    systimer::SystemTimer,
-    timer, Delay, Rtc, IO,
+    rng,
+    spi::{master::Spi, FullDuplexMode, SpiMode},
+    system::SystemControl,
+    timer,
 };
+use esp_println::println;
+use esp_wifi::wifi::{
+    utils::create_network_interface, ClientConfiguration, Configuration, WifiStaDevice,
+};
+use esp_wifi::wifi_interface::WifiStack;
+use esp_wifi::{current_millis, EspWifiInitFor};
 use smoltcp::iface::SocketStorage;
 use smoltcp::wire::{DnsQueryType, IpAddress, Ipv4Address};
 use thiserror_no_std::Error;
@@ -52,7 +55,7 @@ use thiserror_no_std::Error;
 enum MyError {
     Infallible(#[from] core::convert::Infallible),
     Utf8Error(#[from] core::str::Utf8Error),
-    SpiError(#[from] hal::spi::Error),
+    SpiError(#[from] esp_hal::spi::Error),
     EspWifiInitializationError(#[from] esp_wifi::InitializationError),
     EspWifiIoError(#[from] esp_wifi::wifi_interface::IoError),
     EspWifiWifiError(#[from] esp_wifi::wifi::WifiError),
@@ -74,15 +77,16 @@ static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 const HEAP_SIZE: usize = 1024 * 64;
 static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
-type Spi<'a> = spi::Spi<'a, SPI2, spi::FullDuplexMode>;
-type CSPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 5>;
-type BusyPin = gpio::GpioPin<gpio::Input<gpio::Floating>, 4>;
-type DCPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 17>;
-type RSTPin = gpio::GpioPin<gpio::Output<gpio::PushPull>, 16>;
-type Epd<'a> = Epd2in13<Spi<'a>, CSPin, BusyPin, DCPin, RSTPin, Delay>;
+type SpiT<'a> =
+    embedded_hal_bus::spi::ExclusiveDevice<Spi<'a, SPI2, FullDuplexMode>, CSPin<'a>, Delay>;
+type CSPin<'a> = gpio::Output<'a, gpio::GpioPin<5>>;
+type BusyPin<'a> = gpio::Input<'a, gpio::GpioPin<4>>;
+type DCPin<'a> = gpio::Output<'a, gpio::GpioPin<17>>;
+type RSTPin<'a> = gpio::Output<'a, gpio::GpioPin<16>>;
+type Epd<'a> = Epd2in13<SpiT<'a>, BusyPin<'a>, DCPin<'a>, RSTPin<'a>, Delay>;
 struct Context<'a> {
     delay: Delay,
-    spi: Spi<'a>,
+    spi: SpiT<'a>,
     epd: Epd<'a>,
     display: Display2in13,
     next_arrivals: Vec<(&'static str, Vec<u64>)>,
@@ -113,7 +117,7 @@ static STOP_CONFIGS: [StopConfig; 4] = [
 ];
 
 fn request_stop_code_info(
-    socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>,
+    socket: &mut esp_wifi::wifi_interface::Socket<'_, '_, WifiStaDevice>,
     api_ip_address: IpAddress,
     stop_code: u16,
 ) -> Result<String> {
@@ -143,7 +147,9 @@ fn request_stop_code_info(
     Ok(content)
 }
 
-fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> Result<String> {
+fn read_content(
+    socket: &mut esp_wifi::wifi_interface::Socket<'_, '_, WifiStaDevice>,
+) -> Result<String> {
     let mut buffer: Vec<u8> = vec![];
     loop {
         let mut chunk = [0u8; 1024];
@@ -175,49 +181,29 @@ fn read_content(socket: &mut esp_wifi::wifi_interface::Socket<'_, '_>) -> Result
 
 fn init<'a>() -> Result<Context<'a>> {
     let peripherals = Peripherals::take();
-    let mut system = peripherals.PCR.split();
-    let clocks =
-        clock::ClockControl::configure(system.clock_control, clock::CpuClock::Clock160MHz).freeze();
+    let system = SystemControl::new(peripherals.SYSTEM);
+    let clocks = ClockControl::max(system.clock_control).freeze();
 
-    // Disable the RTC and TIMG watchdog timers
-    let mut rtc = Rtc::new(peripherals.LP_CLKRST);
-    let timer_group0 = timer::TimerGroup::new(
-        peripherals.TIMG0,
-        &clocks,
-        &mut system.peripheral_clock_control,
-    );
-    let mut wdt0 = timer_group0.wdt;
-    let timer_group1 = timer::TimerGroup::new(
-        peripherals.TIMG1,
-        &clocks,
-        &mut system.peripheral_clock_control,
-    );
-    let mut wdt1 = timer_group1.wdt;
-    rtc.swd.disable();
-    rtc.rwdt.disable();
-    wdt0.disable();
-    wdt1.disable();
-
-    let timer = SystemTimer::new(peripherals.SYSTIMER).alarm0;
+    let timer = timer::systimer::SystemTimer::new(peripherals.SYSTIMER).alarm0;
     let init = esp_wifi::initialize(
         EspWifiInitFor::Wifi,
         timer,
-        hal::Rng::new(peripherals.RNG),
-        system.radio_clock_control,
+        rng::Rng::new(peripherals.RNG),
+        peripherals.RADIO_CLK,
         &clocks,
     )?;
 
-    let (wifi, _, _) = peripherals.RADIO.split();
+    let wifi = peripherals.WIFI;
     let mut socket_set_entries: [SocketStorage; 3] = Default::default();
     let (iface, device, mut controller, sockets) =
-        create_network_interface(&init, wifi, WifiMode::Sta, &mut socket_set_entries)?;
+        create_network_interface(&init, wifi, WifiStaDevice, &mut socket_set_entries)?;
     let wifi_stack = WifiStack::new(iface, device, sockets, current_millis);
     let mut query_storage: [_; 1] = Default::default();
     wifi_stack.configure_dns(&[Ipv4Address::new(8, 8, 8, 8).into()], &mut query_storage);
 
     let client_config = Configuration::Client(ClientConfiguration {
-        ssid: SSID.into(),
-        password: PASSWORD.into(),
+        ssid: SSID.try_into().unwrap(),
+        password: PASSWORD.try_into().unwrap(),
         ..Default::default()
     });
 
@@ -225,10 +211,10 @@ fn init<'a>() -> Result<Context<'a>> {
     println!("wifi_set_configuration returned {:?}", res);
 
     controller.start()?;
-    println!("is wifi started: {:?}", controller.is_started());
+    assert!(controller.is_started()?);
 
     println!("{:?}", controller.get_capabilities());
-    println!("wifi_connect {:?}", controller.connect());
+    controller.connect()?;
 
     // wait to get connected
     println!("Wait to get connected");
@@ -246,7 +232,7 @@ fn init<'a>() -> Result<Context<'a>> {
             }
         }
     }
-    println!("connected: {:?}", controller.is_connected());
+    assert!(controller.is_connected()?);
 
     // wait for getting an ip address
     println!("Wait to get an ip address");
@@ -277,29 +263,27 @@ fn init<'a>() -> Result<Context<'a>> {
         })
         .collect::<Result<_>>()?;
 
-    let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
-    let mut delay = Delay::new(&clocks);
+    let io = gpio::Io::new(peripherals.GPIO, peripherals.IO_MUX);
 
-    let clk = io.pins.gpio18;
-    let din = io.pins.gpio23;
+    let sclk = io.pins.gpio18;
+    let din = gpio::any_pin::AnyPin::new(io.pins.gpio23);
+    let cs = gpio::Output::new(io.pins.gpio5, gpio::Level::Low);
+    let busy = gpio::Input::new(io.pins.gpio4, gpio::Pull::None);
+    let dc = gpio::Output::new(io.pins.gpio17, gpio::Level::Low);
+    let rst = gpio::Output::new(io.pins.gpio16, gpio::Level::Low);
 
     // TODO: I believe printing breaks after this
-    let mut spi = spi::Spi::new_no_cs_no_miso(
-        peripherals.SPI2,
-        clk,
-        din,
-        4u32.MHz(),
-        spi::SpiMode::Mode0,
-        &mut system.peripheral_clock_control,
-        &clocks,
+    let spi = Spi::new(peripherals.SPI2, 4u32.MHz(), SpiMode::Mode0, &clocks).with_pins(
+        Some(sclk),
+        Some(din),
+        gpio::NO_PIN,
+        gpio::NO_PIN,
     );
+    let mut delay = Delay::new(&clocks);
 
-    let cs = io.pins.gpio5.into_push_pull_output();
-    let busy = io.pins.gpio4.into_floating_input();
-    let dc = io.pins.gpio17.into_push_pull_output();
-    let rst = io.pins.gpio16.into_push_pull_output();
+    let mut spi = embedded_hal_bus::spi::ExclusiveDevice::new(spi, cs, delay)?;
 
-    let epd = Epd2in13::new(&mut spi, cs, busy, dc, rst, &mut delay, None)?;
+    let epd: Epd = Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None).unwrap();
 
     let mut display = Display2in13::default();
     display.set_rotation(DisplayRotation::Rotate90);
@@ -378,15 +362,17 @@ fn run() -> Result<()> {
     let mut ctx = init()?;
 
     ctx.epd
-        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)
+        .unwrap();
     for _ in 0..10 {
         draw_next_arrivals(&mut ctx)?;
         ctx.epd
-            .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
+            .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)
+            .unwrap();
 
         // Delay for a minute and update the arrival times
         // TODO: Periodically fetch new arrival times
-        ctx.delay.delay_ms(60_000u16);
+        ctx.delay.delay_millis(60_000u32);
         for i in 0..ctx.next_arrivals.len() {
             ctx.next_arrivals[i].1 = ctx.next_arrivals[i]
                 .1
@@ -395,14 +381,17 @@ fn run() -> Result<()> {
                 .collect();
         }
         ctx.epd
-            .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)?;
+            .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)
+            .unwrap();
     }
 
     ctx.display.clear(Color::White)?;
     ctx.epd
-        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)
+        .unwrap();
     ctx.epd
-        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
+        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)
+        .unwrap();
     Ok(())
 }
 
