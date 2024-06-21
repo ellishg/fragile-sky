@@ -56,6 +56,9 @@ enum MyError {
     Infallible(#[from] core::convert::Infallible),
     Utf8Error(#[from] core::str::Utf8Error),
     SpiError(#[from] esp_hal::spi::Error),
+    SpiDeviceError(
+        #[from] embedded_hal_bus::spi::DeviceError<esp_hal::spi::Error, core::convert::Infallible>,
+    ),
     EspWifiInitializationError(#[from] esp_wifi::InitializationError),
     EspWifiIoError(#[from] esp_wifi::wifi_interface::IoError),
     EspWifiWifiError(#[from] esp_wifi::wifi::WifiError),
@@ -362,13 +365,11 @@ fn run() -> Result<()> {
     let mut ctx = init()?;
 
     ctx.epd
-        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)
-        .unwrap();
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
     for _ in 0..10 {
         draw_next_arrivals(&mut ctx)?;
         ctx.epd
-            .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)
-            .unwrap();
+            .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
 
         // Delay for a minute and update the arrival times
         // TODO: Periodically fetch new arrival times
@@ -381,17 +382,14 @@ fn run() -> Result<()> {
                 .collect();
         }
         ctx.epd
-            .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)
-            .unwrap();
+            .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)?;
     }
 
     ctx.display.clear(Color::White)?;
     ctx.epd
-        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)
-        .unwrap();
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
     ctx.epd
-        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)
-        .unwrap();
+        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
     Ok(())
 }
 
