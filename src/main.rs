@@ -286,7 +286,7 @@ fn init<'a>() -> Result<Context<'a>> {
 
     let mut spi = embedded_hal_bus::spi::ExclusiveDevice::new(spi, cs, delay)?;
 
-    let epd: Epd = Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None).unwrap();
+    let epd: Epd = Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None)?;
 
     let mut display = Display2in13::default();
     display.set_rotation(DisplayRotation::Rotate90);
