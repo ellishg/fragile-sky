@@ -55,7 +55,6 @@ use thiserror_no_std::Error;
 enum MyError {
     Infallible(#[from] core::convert::Infallible),
     Utf8Error(#[from] core::str::Utf8Error),
-    SpiError(#[from] esp_hal::spi::Error),
     SpiDeviceError(
         #[from] embedded_hal_bus::spi::DeviceError<esp_hal::spi::Error, core::convert::Infallible>,
     ),
@@ -270,10 +269,10 @@ fn init<'a>() -> Result<Context<'a>> {
 
     let clk = io.pins.gpio0;
     let din = io.pins.gpio4;
-    let cs = gpio::Output::new(io.pins.gpio5, gpio::Level::Low);
+    let cs = gpio::Output::new(io.pins.gpio5, gpio::Level::High);
     let busy = gpio::Input::new(io.pins.gpio6, gpio::Pull::None);
-    let dc = gpio::Output::new(io.pins.gpio23, gpio::Level::Low);
-    let rst = gpio::Output::new(io.pins.gpio22, gpio::Level::Low);
+    let dc = gpio::Output::new(io.pins.gpio23, gpio::Level::High);
+    let rst = gpio::Output::new(io.pins.gpio22, gpio::Level::High);
 
     let spi = Spi::new(peripherals.SPI2, 4u32.MHz(), SpiMode::Mode0, &clocks).with_pins(
         Some(clk),
