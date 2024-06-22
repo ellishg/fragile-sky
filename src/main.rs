@@ -83,9 +83,9 @@ static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 type SpiT<'a> =
     embedded_hal_bus::spi::ExclusiveDevice<Spi<'a, SPI2, FullDuplexMode>, CSPin<'a>, Delay>;
 type CSPin<'a> = gpio::Output<'a, gpio::GpioPin<5>>;
-type BusyPin<'a> = gpio::Input<'a, gpio::GpioPin<4>>;
-type DCPin<'a> = gpio::Output<'a, gpio::GpioPin<17>>;
-type RSTPin<'a> = gpio::Output<'a, gpio::GpioPin<16>>;
+type BusyPin<'a> = gpio::Input<'a, gpio::GpioPin<6>>;
+type DCPin<'a> = gpio::Output<'a, gpio::GpioPin<23>>;
+type RSTPin<'a> = gpio::Output<'a, gpio::GpioPin<22>>;
 type Epd<'a> = Epd2in13<SpiT<'a>, BusyPin<'a>, DCPin<'a>, RSTPin<'a>, Delay>;
 struct Context<'a> {
     delay: Delay,
@@ -268,16 +268,15 @@ fn init<'a>() -> Result<Context<'a>> {
 
     let io = gpio::Io::new(peripherals.GPIO, peripherals.IO_MUX);
 
-    let sclk = io.pins.gpio18;
-    let din = gpio::any_pin::AnyPin::new(io.pins.gpio23);
+    let clk = io.pins.gpio0;
+    let din = io.pins.gpio4;
     let cs = gpio::Output::new(io.pins.gpio5, gpio::Level::Low);
-    let busy = gpio::Input::new(io.pins.gpio4, gpio::Pull::None);
-    let dc = gpio::Output::new(io.pins.gpio17, gpio::Level::Low);
-    let rst = gpio::Output::new(io.pins.gpio16, gpio::Level::Low);
+    let busy = gpio::Input::new(io.pins.gpio6, gpio::Pull::None);
+    let dc = gpio::Output::new(io.pins.gpio23, gpio::Level::Low);
+    let rst = gpio::Output::new(io.pins.gpio22, gpio::Level::Low);
 
-    // TODO: I believe printing breaks after this
     let spi = Spi::new(peripherals.SPI2, 4u32.MHz(), SpiMode::Mode0, &clocks).with_pins(
-        Some(sclk),
+        Some(clk),
         Some(din),
         gpio::NO_PIN,
         gpio::NO_PIN,
@@ -373,6 +372,7 @@ fn run() -> Result<()> {
     ctx.epd
         .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
     for _ in 0..10 {
+        println!("draw frame");
         draw_next_arrivals(&mut ctx)?;
         ctx.epd
             .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
