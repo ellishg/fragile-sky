@@ -16,7 +16,7 @@ use embedded_graphics::{
     draw_target::DrawTarget,
     mono_font::{
         ascii::{FONT_9X15, FONT_9X15_BOLD},
-        MonoTextStyle,
+        MonoTextStyleBuilder,
     },
     prelude::*,
     text::Text,
@@ -328,8 +328,14 @@ fn get_minutes_until_next_arrivals(content: &str) -> Result<Vec<u64>> {
 fn draw_next_arrivals(ctx: &mut Context) -> Result<()> {
     ctx.display.clear(Color::White)?;
 
-    let name_style = MonoTextStyle::new(&FONT_9X15_BOLD, Color::Black);
-    let style = MonoTextStyle::new(&FONT_9X15, Color::Black);
+    let name_style = MonoTextStyleBuilder::new()
+        .font(&FONT_9X15_BOLD)
+        .text_color(Color::Black)
+        .build();
+    let style = MonoTextStyleBuilder::new()
+        .font(&FONT_9X15)
+        .text_color(Color::Black)
+        .build();
 
     // This display is 122x250 px
     for (i, (name, next_arrivals)) in ctx.next_arrivals.iter().enumerate() {
