@@ -79,17 +79,17 @@ static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 const HEAP_SIZE: usize = 128 * 1024;
 static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
 
-type SpiT<'a> =
-    embedded_hal_bus::spi::ExclusiveDevice<Spi<'a, SPI2, FullDuplexMode>, CSPin<'a>, Delay>;
-type CSPin<'a> = gpio::Output<'a, gpio::GpioPin<5>>;
-type BusyPin<'a> = gpio::Input<'a, gpio::GpioPin<6>>;
-type DCPin<'a> = gpio::Output<'a, gpio::GpioPin<23>>;
-type RSTPin<'a> = gpio::Output<'a, gpio::GpioPin<22>>;
-type Epd<'a> = Epd2in13<SpiT<'a>, BusyPin<'a>, DCPin<'a>, RSTPin<'a>, Delay>;
-struct Context<'a> {
+type SpiT =
+    embedded_hal_bus::spi::ExclusiveDevice<Spi<'static, SPI2, FullDuplexMode>, CSPin, Delay>;
+type CSPin = gpio::Output<'static, gpio::GpioPin<5>>;
+type BusyPin = gpio::Input<'static, gpio::GpioPin<6>>;
+type DCPin = gpio::Output<'static, gpio::GpioPin<23>>;
+type RSTPin = gpio::Output<'static, gpio::GpioPin<22>>;
+type Epd = Epd2in13<SpiT, BusyPin, DCPin, RSTPin, Delay>;
+struct Context {
     delay: Delay,
-    spi: SpiT<'a>,
-    epd: Epd<'a>,
+    spi: SpiT,
+    epd: Epd,
     display: Display2in13,
     next_arrivals: Vec<(&'static str, Vec<u64>)>,
 }
@@ -181,7 +181,7 @@ fn read_content(
     }
 }
 
-fn init<'a>() -> Result<Context<'a>> {
+fn init() -> Result<Context> {
     let peripherals = Peripherals::take();
     let system = SystemControl::new(peripherals.SYSTEM);
     let clocks = ClockControl::max(system.clock_control).freeze();
