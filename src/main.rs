@@ -195,6 +195,39 @@ fn init() -> Result<Context> {
         &clocks,
     )?;
 
+    let io = gpio::Io::new(peripherals.GPIO, peripherals.IO_MUX);
+
+    let clk = io.pins.gpio0;
+    let din = io.pins.gpio4;
+    let cs = gpio::Output::new(io.pins.gpio5, gpio::Level::High);
+    let busy = gpio::Input::new(io.pins.gpio6, gpio::Pull::None);
+    let dc = gpio::Output::new(io.pins.gpio23, gpio::Level::High);
+    let rst = gpio::Output::new(io.pins.gpio22, gpio::Level::High);
+
+    let spi = Spi::new(peripherals.SPI2, 4u32.MHz(), SpiMode::Mode0, &clocks).with_pins(
+        Some(clk),
+        Some(din),
+        gpio::NO_PIN,
+        gpio::NO_PIN,
+    );
+    let mut delay = Delay::new(&clocks);
+
+    let mut spi = embedded_hal_bus::spi::ExclusiveDevice::new(spi, cs, delay)?;
+
+    let mut epd: Epd = Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None)?;
+    epd.set_refresh(&mut spi, &mut delay, RefreshLut::Full)?;
+
+    let mut display = Display2in13::default();
+    display.clear(Color::White)?;
+    display.set_rotation(DisplayRotation::Rotate90);
+
+    let style = MonoTextStyleBuilder::new()
+        .font(&FONT_9X15)
+        .text_color(Color::Black)
+        .build();
+    Text::new("Connecting...", Point::new(5, 15), style).draw(&mut display)?;
+    epd.update_and_display_frame(&mut spi, display.buffer(), &mut delay)?;
+
     let wifi = peripherals.WIFI;
     let mut socket_set_entries: [SocketStorage; 3] = Default::default();
     let (iface, device, mut controller, sockets) =
@@ -264,30 +297,6 @@ fn init() -> Result<Context> {
             Ok((stop_config.name, next_arrivals))
         })
         .collect::<Result<_>>()?;
-
-    let io = gpio::Io::new(peripherals.GPIO, peripherals.IO_MUX);
-
-    let clk = io.pins.gpio0;
-    let din = io.pins.gpio4;
-    let cs = gpio::Output::new(io.pins.gpio5, gpio::Level::High);
-    let busy = gpio::Input::new(io.pins.gpio6, gpio::Pull::None);
-    let dc = gpio::Output::new(io.pins.gpio23, gpio::Level::High);
-    let rst = gpio::Output::new(io.pins.gpio22, gpio::Level::High);
-
-    let spi = Spi::new(peripherals.SPI2, 4u32.MHz(), SpiMode::Mode0, &clocks).with_pins(
-        Some(clk),
-        Some(din),
-        gpio::NO_PIN,
-        gpio::NO_PIN,
-    );
-    let mut delay = Delay::new(&clocks);
-
-    let mut spi = embedded_hal_bus::spi::ExclusiveDevice::new(spi, cs, delay)?;
-
-    let epd: Epd = Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None)?;
-
-    let mut display = Display2in13::default();
-    display.set_rotation(DisplayRotation::Rotate90);
 
     Ok(Context {
         delay,
@@ -369,7 +378,7 @@ fn run() -> Result<()> {
     let mut ctx = init()?;
 
     ctx.epd
-        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
+        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)?;
     for _ in 0..10 {
         println!("draw frame");
         draw_next_arrivals(&mut ctx)?;
