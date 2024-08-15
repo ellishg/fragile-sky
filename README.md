@@ -47,3 +47,5 @@ cargo flash --monitor
   * https://www.waveshare.com/wiki/2.13inch_e-Paper_HAT_Manual
 * epd-waveshare docs
   * https://docs.rs/epd-waveshare/latest/epd_waveshare/index.html
+* Pins from a different board that may be useful
+  * https://lastminuteengineers.com/esp32-pinout-reference/
