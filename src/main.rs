@@ -27,8 +27,8 @@ use epd_waveshare::{
     epd2in13_v2::{Display2in13, Epd2in13},
     prelude::*,
 };
-use esp_hal::clock::ClockControl;
 use esp_backtrace as _;
+use esp_hal::clock::ClockControl;
 use esp_hal::{
     delay::Delay,
     gpio,
