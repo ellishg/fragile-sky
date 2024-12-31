@@ -9,5 +9,5 @@ rustflags = [
 ]
 target = "riscv32imac-unknown-none-elf"
 
-[alias]
-flash = "espflash flash"
+[target.riscv32imac-unknown-none-elf]
+runner = "espflash flash --monitor"
