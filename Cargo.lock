@@ -128,9 +128,9 @@ dependencies = [
 
 [[package]]
 name = "critical-section"
-version = "1.1.2"
+version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7059fff8937831a9ae6f0fe4d658ffabf58f2ca96aa9dec1c889f936f705f216"
+checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "darling"
@@ -361,8 +361,9 @@ dependencies = [
 
 [[package]]
 name = "epd-waveshare"
-version = "0.5.0"
-source = "git+https://github.com/caemor/epd-waveshare.git?rev=1244f03591bcc5f001b6e634170eb99e29e768d0#1244f03591bcc5f001b6e634170eb99e29e768d0"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5080903b18a41a89d1dfe07cd5d7f800165ed4dcdf0513b770f83c1e4750150c"
 dependencies = [
  "bit_field",
  "embedded-graphics-core",
@@ -387,10 +388,11 @@ dependencies = [
 
 [[package]]
 name = "esp-backtrace"
-version = "0.8.0"
+version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c7d3ecccb0df809cb6ca79b08f863271c0aa24f586df96272988a85d34dfa62"
+checksum = "cb7660d85e3e7b0e113aaeeffb1a155e64a09a5035d4104031875acdba4cb68e"
 dependencies = [
+ "esp-build",
  "esp-println",
 ]
 
@@ -489,11 +491,14 @@ dependencies = [
 
 [[package]]
 name = "esp-println"
-version = "0.6.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79b429ea925356d60c10d7214cf0e1777d9578c1287cd50aad09df3c22c4c2f1"
+checksum = "ee38e87bc7e303c299047c0e9bcd0f8ccca7c7e70d1fd78bbb565db14f33beb6"
 dependencies = [
  "critical-section",
+ "esp-build",
+ "log",
+ "portable-atomic",
 ]
 
 [[package]]
@@ -742,9 +747,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.21"
+version = "0.4.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
+checksum = "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24"
 
 [[package]]
 name = "managed"
@@ -851,9 +856,9 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "portable-atomic"
-version = "1.6.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
+checksum = "280dc24453071f1b63954171985a0b0d30058d287960968b9b2aca264c8d4ee6"
 
 [[package]]
 name = "portable_atomic_enum"

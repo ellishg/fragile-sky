@@ -28,7 +28,6 @@ use epd_waveshare::{
     prelude::*,
 };
 use esp_hal::clock::ClockControl;
-// TODO: Backtrace does not work
 use esp_backtrace as _;
 use esp_hal::{
     delay::Delay,
@@ -101,6 +100,7 @@ struct Context {
     next_arrivals: Vec<(&'static str, Vec<u64>)>,
 }
 
+// TODO: Move to cfg.toml
 struct StopConfig {
     stop_code: u16,
     name: &'static str,

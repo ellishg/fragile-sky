@@ -12,12 +12,12 @@ license = "MIT"
 esp-hal = { version = "0.18.0", features = ["embedded-hal", "esp32c6"] }
 embedded-hal = "1.0.0"
 embedded-hal-bus = "0.2.0"
-epd-waveshare = { git = "https://github.com/caemor/epd-waveshare.git", rev = "1244f03591bcc5f001b6e634170eb99e29e768d0" }
+epd-waveshare = "0.6.0"
 embedded-graphics = "0.8.0"
 embedded-svc = { version = "0.27.0", default-features = false, features = [] }
 esp-wifi = { version = "0.6.0", features = ["esp32c6", "utils", "tcp", "dns", "wifi", "wifi-default", "embedded-svc"] }
-esp-backtrace = { version = "0.8.0", features = ["esp32c6", "panic-handler", "exception-handler", "print-uart"] }
-esp-println = { version = "0.6.0", features = ["esp32c6"] }
+esp-backtrace = { version = "0.14.2", features = ["esp32c6", "println", "panic-handler"] }
+esp-println = { version = "0.12.0", features = ["esp32c6"] }
 httparse = { version = "1.8.0", default-features = false, features = [] }
 smoltcp = { version = "0.11.0", default-features=false, features = ["proto-igmp", "proto-ipv4", "proto-dns", "socket-tcp", "socket-icmp", "socket-udp", "socket-dns", "medium-ethernet", "proto-dhcpv4", "socket-raw", "socket-dhcpv4"] }
 serde_json = { version = "1.0.103", default-features = false, features = ["alloc"] }
