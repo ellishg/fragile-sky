@@ -602,6 +602,7 @@ dependencies = [
  "serde_json",
  "smoltcp",
  "thiserror-no-std",
+ "toml-cfg",
 ]
 
 [[package]]

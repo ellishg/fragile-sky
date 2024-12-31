@@ -69,9 +69,16 @@ enum MyError {
 }
 type Result<T> = core::result::Result<T, MyError>;
 
-const SSID: &str = env!("SSID");
-const PASSWORD: &str = env!("PASSWORD");
-const API_KEY: &str = env!("API_KEY");
+#[derive(Debug)]
+#[toml_cfg::toml_config]
+pub struct Config {
+    #[default("")]
+    wifi_ssid: &'static str,
+    #[default("")]
+    wifi_password: &'static str,
+    #[default("")]
+    api_key: &'static str,
+}
 
 #[global_allocator]
 static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
@@ -136,7 +143,7 @@ fn request_stop_code_info(
             "Accept: application/json\r\n",
             "Accept-Encoding: identity\r\n\r\n",
         ),
-        API_KEY, stop_code
+        CONFIG.api_key, stop_code
     );
     socket.write(get_request.as_bytes())?;
     socket.flush()?;
@@ -237,8 +244,8 @@ fn init() -> Result<Context> {
     wifi_stack.configure_dns(&[Ipv4Address::new(8, 8, 8, 8).into()], &mut query_storage);
 
     let client_config = Configuration::Client(ClientConfiguration {
-        ssid: SSID.try_into().unwrap(),
-        password: PASSWORD.try_into().unwrap(),
+        ssid: CONFIG.wifi_ssid.try_into().unwrap(),
+        password: CONFIG.wifi_password.try_into().unwrap(),
         ..Default::default()
     });
 
