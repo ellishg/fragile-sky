@@ -32,7 +32,7 @@ cargo install cargo-espflash
 
 Connect to the board via the UART port.
 ```
-cargo flash --monitor
+cargo run
 ```
 
 ## Useful Links

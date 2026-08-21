@@ -1,17 +1,20 @@
-// TODO: We may be able to use esp-idf now
-// https://mabez.dev/blog/posts/esp-rust-30-06-2023/
 #![no_std]
 #![no_main]
 
 extern crate alloc;
 
 use alloc::format;
-use alloc::string::{String, ToString};
-use alloc::vec;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use anyhow::anyhow;
 use chrono::NaiveDateTime;
-use core::ptr::addr_of;
+use embassy_executor::Spawner;
+use embassy_net::{
+    dns::DnsSocket,
+    tcp::client::{TcpClient, TcpClientState},
+    Runner, StackResources,
+};
+use embassy_time::{Duration, Timer};
 use embedded_graphics::{
     draw_target::DrawTarget,
     mono_font::{
@@ -21,33 +24,41 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
-use embedded_svc::io::{Read, Write};
+use embedded_hal_bus;
 use epd_waveshare::{
     color::*,
     epd2in13_v2::{Display2in13, Epd2in13},
     prelude::*,
 };
 use esp_backtrace as _;
-use esp_hal::clock::ClockControl;
+use esp_hal::interrupt::software::SoftwareInterruptControl;
+use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{
     delay::Delay,
     gpio,
-    peripherals::{Peripherals, SPI2},
-    prelude::*,
-    rng,
-    spi::{master::Spi, FullDuplexMode, SpiMode},
-    system::SystemControl,
-    timer,
+    gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
+    spi,
+    spi::{master::Spi, Mode},
+    time::Rate,
+    Blocking,
 };
 use esp_println::println;
-use esp_wifi::wifi::{
-    utils::create_network_interface, ClientConfiguration, Configuration, WifiStaDevice,
+use esp_radio::wifi;
+use reqwless::{
+    client::HttpClient,
+    request::{Method, RequestBuilder},
 };
-use esp_wifi::wifi_interface::WifiStack;
-use esp_wifi::{current_millis, EspWifiInitFor};
-use smoltcp::iface::SocketStorage;
-use smoltcp::wire::{DnsQueryType, IpAddress, Ipv4Address};
 use thiserror_no_std::Error;
+
+// When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
 
 #[derive(Error, Debug)]
 #[allow(dead_code)]
@@ -57,10 +68,9 @@ enum MyError {
     SpiDeviceError(
         #[from] embedded_hal_bus::spi::DeviceError<esp_hal::spi::Error, core::convert::Infallible>,
     ),
-    EspWifiInitializationError(#[from] esp_wifi::InitializationError),
-    EspWifiIoError(#[from] esp_wifi::wifi_interface::IoError),
-    EspWifiWifiError(#[from] esp_wifi::wifi::WifiError),
-    EspWifiWifiStackError(#[from] esp_wifi::wifi_interface::WifiStackError),
+    SpiConfigError(#[from] esp_hal::spi::master::ConfigError),
+    WifiError(#[from] wifi::WifiError),
+    ReqwlessError(#[from] reqwless::Error),
     ChronoParseError(#[from] chrono::ParseError),
     SerdeJsonError(#[from] serde_json::Error),
     #[error(transparent)]
@@ -79,18 +89,14 @@ pub struct Config {
     api_key: &'static str,
 }
 
-#[global_allocator]
-static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
-// TODO: It seems that the symbol "_heap_start" is defined. Maybe that can help us.
-const HEAP_SIZE: usize = 128 * 1024;
-static mut HEAP: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
-
-type SpiT =
-    embedded_hal_bus::spi::ExclusiveDevice<Spi<'static, SPI2, FullDuplexMode>, CSPin, Delay>;
-type CSPin = gpio::Output<'static, gpio::GpioPin<5>>;
-type BusyPin = gpio::Input<'static, gpio::GpioPin<6>>;
-type DCPin = gpio::Output<'static, gpio::GpioPin<23>>;
-type RSTPin = gpio::Output<'static, gpio::GpioPin<22>>;
+type SpiT = embedded_hal_bus::spi::ExclusiveDevice<
+    Spi<'static, Blocking>,
+    gpio::Output<'static>,
+    embedded_hal_bus::spi::NoDelay,
+>;
+type BusyPin = gpio::Input<'static>;
+type DCPin = gpio::Output<'static>;
+type RSTPin = gpio::Output<'static>;
 type Epd = Epd2in13<SpiT, BusyPin, DCPin, RSTPin, Delay>;
 struct Context {
     delay: Delay,
@@ -125,101 +131,35 @@ static STOP_CONFIGS: [StopConfig; 4] = [
     },
 ];
 
-fn request_stop_code_info(
-    socket: &mut esp_wifi::wifi_interface::Socket<'_, '_, WifiStaDevice>,
-    api_ip_address: IpAddress,
-    stop_code: u16,
-) -> Result<String> {
-    // curl -X GET -v -I "http://api.511.org/transit/StopMonitoring?api_key=<API_KEY>&agency=SF&format=json&stopcode=<STOP_CODE>"
-    println!("Making HTTP request");
-    socket.work();
+async fn init(spawner: Spawner) -> Result<Context> {
+    let peripherals = esp_hal::init(esp_hal::Config::default());
 
-    socket.open(api_ip_address, 80)?;
+    let timg0 = TimerGroup::new(peripherals.TIMG0);
+    let sw_interrupt = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
-    let get_request = format!(
-        concat!(
-            "GET /transit/StopMonitoring?api_key={}&agency=SF&format=json&stopcode={} HTTP/1.0\r\n",
-            "Host: api.511.org\r\n",
-            "Accept: application/json\r\n",
-            "Accept-Encoding: identity\r\n\r\n",
-        ),
-        CONFIG.api_key, stop_code
+    let clk = peripherals.GPIO0;
+    let din = peripherals.GPIO4;
+    let cs = Output::new(peripherals.GPIO5, Level::High, OutputConfig::default());
+    let busy = Input::new(
+        peripherals.GPIO6,
+        InputConfig::default().with_pull(Pull::None),
     );
-    socket.write(get_request.as_bytes())?;
-    socket.flush()?;
+    let dc = Output::new(peripherals.GPIO23, Level::High, OutputConfig::default());
+    let rst = Output::new(peripherals.GPIO22, Level::High, OutputConfig::default());
 
-    let content = read_content(socket)?;
+    let spi = Spi::new(
+        peripherals.SPI2,
+        spi::master::Config::default()
+            .with_frequency(Rate::from_khz(100))
+            .with_mode(Mode::_0),
+    )?
+    .with_sck(clk)
+    .with_mosi(din);
 
-    socket.disconnect();
-    socket.work();
+    let mut delay = Delay::new();
 
-    Ok(content)
-}
-
-fn read_content(
-    socket: &mut esp_wifi::wifi_interface::Socket<'_, '_, WifiStaDevice>,
-) -> Result<String> {
-    let mut buffer: Vec<u8> = vec![];
-    loop {
-        let mut chunk = [0u8; 1024];
-        if let Ok(bytes_read) = socket.read(&mut chunk) {
-            buffer.extend_from_slice(&chunk[..bytes_read]);
-        } else if !buffer.is_empty() {
-            let mut headers = [httparse::EMPTY_HEADER; 64];
-            let mut response = httparse::Response::new(&mut headers);
-            if let Ok(httparse::Status::Complete(content_start)) = response.parse(&buffer) {
-                let content = &buffer[content_start..];
-                // TODO: I'm not sure if this is needed to guarantee the content is complete
-                // for header in response.headers.iter() {
-                //     if header.name == "Content-Length" {
-                //         let value = core::str::from_utf8(header.value)?;
-                //         let expected_content_length: usize = value.parse()?;
-                //         if content.len() >= expected_content_length {
-                //             return core::str::from_utf8(content)?.to_string();
-                //         }
-                //     }
-                // }
-                return Ok(core::str::from_utf8(content)?
-                    // TODO: I'm not sure why, but the content is prefixed with "ï»¿"
-                    .replace(|c: char| !c.is_ascii(), "")
-                    .to_string());
-            }
-        }
-    }
-}
-
-fn init() -> Result<Context> {
-    let peripherals = Peripherals::take();
-    let system = SystemControl::new(peripherals.SYSTEM);
-    let clocks = ClockControl::max(system.clock_control).freeze();
-
-    let timer = timer::systimer::SystemTimer::new(peripherals.SYSTIMER).alarm0;
-    let init = esp_wifi::initialize(
-        EspWifiInitFor::Wifi,
-        timer,
-        rng::Rng::new(peripherals.RNG),
-        peripherals.RADIO_CLK,
-        &clocks,
-    )?;
-
-    let io = gpio::Io::new(peripherals.GPIO, peripherals.IO_MUX);
-
-    let clk = io.pins.gpio0;
-    let din = io.pins.gpio4;
-    let cs = gpio::Output::new(io.pins.gpio5, gpio::Level::High);
-    let busy = gpio::Input::new(io.pins.gpio6, gpio::Pull::None);
-    let dc = gpio::Output::new(io.pins.gpio23, gpio::Level::High);
-    let rst = gpio::Output::new(io.pins.gpio22, gpio::Level::High);
-
-    let spi = Spi::new(peripherals.SPI2, 4u32.MHz(), SpiMode::Mode0, &clocks).with_pins(
-        Some(clk),
-        Some(din),
-        gpio::NO_PIN,
-        gpio::NO_PIN,
-    );
-    let mut delay = Delay::new(&clocks);
-
-    let mut spi = embedded_hal_bus::spi::ExclusiveDevice::new(spi, cs, delay)?;
+    let mut spi = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(spi, cs)?;
 
     let mut epd: Epd = Epd2in13::new(&mut spi, busy, dc, rst, &mut delay, None)?;
     epd.set_refresh(&mut spi, &mut delay, RefreshLut::Full)?;
@@ -235,75 +175,86 @@ fn init() -> Result<Context> {
     Text::new("Connecting...", Point::new(5, 15), style).draw(&mut display)?;
     epd.update_and_display_frame(&mut spi, display.buffer(), &mut delay)?;
 
-    let wifi = peripherals.WIFI;
-    let mut socket_set_entries: [SocketStorage; 3] = Default::default();
-    let (iface, device, mut controller, sockets) =
-        create_network_interface(&init, wifi, WifiStaDevice, &mut socket_set_entries)?;
-    let wifi_stack = WifiStack::new(iface, device, sockets, current_millis);
-    let mut query_storage: [_; 1] = Default::default();
-    wifi_stack.configure_dns(&[Ipv4Address::new(8, 8, 8, 8).into()], &mut query_storage);
+    let client_config = wifi::Config::Station(
+        wifi::sta::StationConfig::default()
+            .with_ssid(CONFIG.wifi_ssid)
+            .with_password(CONFIG.wifi_password.into()),
+    );
+    let wifi_interface = wifi::Interface::station();
+    let mut wifi_controller = wifi::WifiController::new(
+        peripherals.WIFI,
+        wifi::ControllerConfig::default().with_initial_config(client_config),
+    )?;
 
-    let client_config = Configuration::Client(ClientConfiguration {
-        ssid: CONFIG.wifi_ssid.try_into().unwrap(),
-        password: CONFIG.wifi_password.try_into().unwrap(),
-        ..Default::default()
-    });
+    let config = embassy_net::Config::dhcpv4(Default::default());
 
-    let res = controller.set_configuration(&client_config);
-    println!("wifi_set_configuration returned {:?}", res);
+    let rng = esp_hal::rng::Rng::new();
+    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
 
-    controller.start()?;
-    assert!(controller.is_started()?);
+    // Init network stack
+    let (stack, runner) = embassy_net::new(
+        wifi_interface,
+        config,
+        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        seed,
+    );
 
-    println!("{:?}", controller.get_capabilities());
-    controller.connect()?;
-
-    // wait to get connected
-    println!("Wait to get connected");
-    loop {
-        let res = controller.is_connected();
-        match res {
-            Ok(connected) => {
-                if connected {
-                    break;
-                }
-            }
-            Err(err) => {
-                // TODO: This sometimes fails, retry
-                panic!("Did not connect: {:?}", err);
-            }
-        }
-    }
-    assert!(controller.is_connected()?);
-
-    // wait for getting an ip address
-    println!("Wait to get an ip address");
-    loop {
-        wifi_stack.work();
-
-        if wifi_stack.is_iface_up() {
-            println!("{:?}", wifi_stack.get_ip_info()?);
-            break;
-        }
+    println!("Scan");
+    let scan_config = esp_radio::wifi::scan::ScanConfig::default().with_max(10);
+    let result = wifi_controller.scan_async(&scan_config).await.unwrap();
+    for ap in result {
+        println!("{:?}", ap);
     }
 
-    // TODO: Add wifi_stack to Context
-    let mut rx_buffer = [0u8; 1536];
-    let mut tx_buffer = [0u8; 1536];
-    let mut socket = wifi_stack.get_socket(&mut rx_buffer, &mut tx_buffer);
+    spawner.spawn(connection(wifi_controller).unwrap());
+    spawner.spawn(net_task(runner).unwrap());
 
-    let api_ip_address = wifi_stack.dns_query("api.511.org", DnsQueryType::A)?[0];
-    println!("Found ip address for api.511.org: {}", api_ip_address);
+    stack.wait_config_up().await;
 
-    let next_arrivals = STOP_CONFIGS
-        .iter()
-        .map(|stop_config| {
-            let response =
-                request_stop_code_info(&mut socket, api_ip_address, stop_config.stop_code)?;
-            let next_arrivals = get_minutes_until_next_arrivals(&response)?;
-            Ok((stop_config.name, next_arrivals))
-        })
-        .collect::<Result<_>>()?;
+    if let Some(config) = stack.config_v4() {
+        println!("Got IP: {}", config.address);
+    }
+
+    // Init HTTP client
+    let tcp_client = TcpClient::new(
+        stack,
+        mk_static!(
+            TcpClientState<1, 1500, 1500>,
+            TcpClientState::<1, 1500, 1500>::new()
+        ),
+    );
+    let dns_client = DnsSocket::new(stack);
+
+    let mut client = HttpClient::new(&tcp_client, &dns_client);
+    let mut rx_buf = [0u8; 16 * 1024];
+
+    let mut next_arrivals: Vec<(&'static str, Vec<u64>)> = Vec::new();
+    for stop_config in STOP_CONFIGS.iter() {
+        let url = format!("http://api.511.org/transit/StopMonitoring?api_key={}&agency=SF&format=json&stopcode={}", CONFIG.api_key, stop_config.stop_code);
+        let builder = client.request(Method::GET, &url).await?;
+        let mut builder = builder.headers(&[
+            ("Host", "api.511.org"),
+            ("Accept", "application/json"),
+            ("Accept-Encoding", "identity"),
+            ("Connection", "close"),
+        ]);
+        let response = builder.send(&mut rx_buf).await?;
+        match response.body().read_to_end().await {
+            Ok(data) => {
+                let body = core::str::from_utf8(data)?;
+                next_arrivals.push((stop_config.name, get_minutes_until_next_arrivals(&body)?));
+            }
+            Err(e) => println!("Body error: {:?}", e),
+        }
+        println!("done");
+    }
+
+    // let next_arrivals = vec![
+    //     ("N Eastbound", vec![5, 15, 25]),
+    //     ("N Westbound", vec![3, 13, 23]),
+    //     ("Hght&Clytn W", vec![7, 17, 27]),
+    //     ("Hght&Clytn E", vec![2, 12, 22]),
+    // ];
 
     Ok(Context {
         delay,
@@ -375,14 +326,10 @@ fn draw_next_arrivals(ctx: &mut Context) -> Result<()> {
     Ok(())
 }
 
-fn run() -> Result<()> {
-    // Initialize the heap
-    unsafe {
-        let heap_start = addr_of!(HEAP) as *const _ as usize;
-        ALLOCATOR.init(heap_start as *mut u8, HEAP_SIZE);
-    }
+async fn run(spawner: Spawner) -> Result<()> {
+    esp_alloc::heap_allocator!(size: 128 * 1024);
 
-    let mut ctx = init()?;
+    let mut ctx = init(spawner).await?;
 
     ctx.epd
         .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)?;
@@ -414,9 +361,38 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-#[entry]
-fn main() -> ! {
-    run().unwrap();
+#[esp_rtos::main]
+async fn main(spawner: Spawner) -> ! {
+    run(spawner).await.unwrap();
     #[allow(clippy::empty_loop)]
     loop {}
+}
+
+#[embassy_executor::task]
+async fn connection(mut controller: esp_radio::wifi::WifiController<'static>) {
+    println!("start connection task");
+
+    loop {
+        println!("About to connect...");
+
+        match controller.connect_async().await {
+            Ok(info) => {
+                println!("Wifi connected to {:?}", info);
+
+                // wait until we're no longer connected
+                let info = controller.wait_for_disconnect_async().await.ok();
+                println!("Disconnected: {:?}", info);
+            }
+            Err(e) => {
+                println!("Failed to connect to wifi: {e:?}");
+            }
+        }
+
+        Timer::after(Duration::from_millis(5000)).await
+    }
+}
+
+#[embassy_executor::task]
+async fn net_task(mut runner: Runner<'static, esp_radio::wifi::Interface>) {
+    runner.run().await
 }
