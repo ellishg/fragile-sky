@@ -35,28 +35,12 @@ use esp_hal::{
     Blocking,
 };
 use esp_println::println;
-use thiserror_no_std::Error;
 
+mod error;
 mod transit_api;
 mod wifi;
 
-#[derive(Error, Debug)]
-#[allow(dead_code)]
-enum MyError {
-    Infallible(#[from] core::convert::Infallible),
-    Utf8Error(#[from] core::str::Utf8Error),
-    SpiDeviceError(
-        #[from] embedded_hal_bus::spi::DeviceError<esp_hal::spi::Error, core::convert::Infallible>,
-    ),
-    SpiConfigError(#[from] esp_hal::spi::master::ConfigError),
-    WifiError(#[from] esp_radio::wifi::WifiError),
-    ReqwlessError(#[from] reqwless::Error),
-    ChronoParseError(#[from] chrono::ParseError),
-    SerdeJsonError(#[from] serde_json::Error),
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
-}
-type Result<T> = core::result::Result<T, MyError>;
+pub(crate) use error::Result;
 
 #[derive(Debug)]
 #[toml_cfg::toml_config]

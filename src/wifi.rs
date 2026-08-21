@@ -13,7 +13,7 @@ pub async fn connect(
     device: WIFI<'static>,
     ssid: &'static str,
     password: &'static str,
-) -> Result<Stack<'static>, wifi::WifiError> {
+) -> crate::Result<Stack<'static>> {
     let client_config = wifi::Config::Station(
         wifi::sta::StationConfig::default()
             .with_ssid(ssid)
@@ -39,8 +39,8 @@ pub async fn connect(
     let scan_config = wifi::scan::ScanConfig::default().with_max(10);
     wifi_controller.scan_async(&scan_config).await?;
 
-    spawner.spawn(connection(wifi_controller).unwrap());
-    spawner.spawn(net_task(runner).unwrap());
+    spawner.spawn(connection(wifi_controller)?);
+    spawner.spawn(net_task(runner)?);
 
     stack.wait_config_up().await;
 

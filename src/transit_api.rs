@@ -76,7 +76,6 @@ pub async fn fetch_arrivals(
             }
             Err(e) => println!("Body error: {:?}", e),
         }
-        println!("done");
     }
 
     Ok(next_arrivals)
