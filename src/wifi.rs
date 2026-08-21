@@ -5,14 +5,8 @@ use esp_hal::peripherals::WIFI;
 use esp_println::println;
 use esp_radio::wifi;
 
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
+static NETWORK_RESOURCES: static_cell::StaticCell<StackResources<3>> =
+    static_cell::StaticCell::new();
 
 pub async fn connect(
     spawner: Spawner,
@@ -38,7 +32,7 @@ pub async fn connect(
     let (stack, runner) = embassy_net::new(
         wifi_interface,
         config,
-        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        NETWORK_RESOURCES.uninit().write(StackResources::new()),
         seed,
     );
 

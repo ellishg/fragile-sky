@@ -22,7 +22,6 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
-use embedded_hal_bus;
 use epd_waveshare::{
     color::*,
     epd2in13_v2::{Display2in13, Epd2in13},
@@ -49,16 +48,6 @@ use thiserror_no_std::Error;
 
 mod wifi;
 
-// When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
-    }};
-}
-
 #[derive(Error, Debug)]
 #[allow(dead_code)]
 enum MyError {
@@ -76,6 +65,9 @@ enum MyError {
     Other(#[from] anyhow::Error),
 }
 type Result<T> = core::result::Result<T, MyError>;
+
+static TCP_CLIENT_STATE: static_cell::StaticCell<TcpClientState<1, 1500, 1500>> =
+    static_cell::StaticCell::new();
 
 #[derive(Debug)]
 #[toml_cfg::toml_config]
@@ -185,10 +177,7 @@ async fn init(spawner: Spawner) -> Result<Context> {
     // Init HTTP client
     let tcp_client = TcpClient::new(
         stack,
-        mk_static!(
-            TcpClientState<1, 1500, 1500>,
-            TcpClientState::<1, 1500, 1500>::new()
-        ),
+        TCP_CLIENT_STATE.uninit().write(TcpClientState::new()),
     );
     let dns_client = DnsSocket::new(stack);
 
@@ -209,7 +198,7 @@ async fn init(spawner: Spawner) -> Result<Context> {
         match response.body().read_to_end().await {
             Ok(data) => {
                 let body = core::str::from_utf8(data)?;
-                next_arrivals.push((stop_config.name, get_minutes_until_next_arrivals(&body)?));
+                next_arrivals.push((stop_config.name, get_minutes_until_next_arrivals(body)?));
             }
             Err(e) => println!("Body error: {:?}", e),
         }
