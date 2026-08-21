@@ -12,9 +12,7 @@ use embassy_executor::Spawner;
 use embassy_net::{
     dns::DnsSocket,
     tcp::client::{TcpClient, TcpClientState},
-    Runner, StackResources,
 };
-use embassy_time::{Duration, Timer};
 use embedded_graphics::{
     draw_target::DrawTarget,
     mono_font::{
@@ -43,12 +41,13 @@ use esp_hal::{
     Blocking,
 };
 use esp_println::println;
-use esp_radio::wifi;
 use reqwless::{
     client::HttpClient,
     request::{Method, RequestBuilder},
 };
 use thiserror_no_std::Error;
+
+mod wifi;
 
 // When you are okay with using a nightly compiler it's better to use https://docs.rs/static_cell/2.1.0/static_cell/macro.make_static.html
 macro_rules! mk_static {
@@ -69,7 +68,7 @@ enum MyError {
         #[from] embedded_hal_bus::spi::DeviceError<esp_hal::spi::Error, core::convert::Infallible>,
     ),
     SpiConfigError(#[from] esp_hal::spi::master::ConfigError),
-    WifiError(#[from] wifi::WifiError),
+    WifiError(#[from] esp_radio::wifi::WifiError),
     ReqwlessError(#[from] reqwless::Error),
     ChronoParseError(#[from] chrono::ParseError),
     SerdeJsonError(#[from] serde_json::Error),
@@ -175,45 +174,13 @@ async fn init(spawner: Spawner) -> Result<Context> {
     Text::new("Connecting...", Point::new(5, 15), style).draw(&mut display)?;
     epd.update_and_display_frame(&mut spi, display.buffer(), &mut delay)?;
 
-    let client_config = wifi::Config::Station(
-        wifi::sta::StationConfig::default()
-            .with_ssid(CONFIG.wifi_ssid)
-            .with_password(CONFIG.wifi_password.into()),
-    );
-    let wifi_interface = wifi::Interface::station();
-    let mut wifi_controller = wifi::WifiController::new(
+    let stack = wifi::connect(
+        spawner,
         peripherals.WIFI,
-        wifi::ControllerConfig::default().with_initial_config(client_config),
-    )?;
-
-    let config = embassy_net::Config::dhcpv4(Default::default());
-
-    let rng = esp_hal::rng::Rng::new();
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-
-    // Init network stack
-    let (stack, runner) = embassy_net::new(
-        wifi_interface,
-        config,
-        mk_static!(StackResources<3>, StackResources::<3>::new()),
-        seed,
-    );
-
-    println!("Scan");
-    let scan_config = esp_radio::wifi::scan::ScanConfig::default().with_max(10);
-    let result = wifi_controller.scan_async(&scan_config).await.unwrap();
-    for ap in result {
-        println!("{:?}", ap);
-    }
-
-    spawner.spawn(connection(wifi_controller).unwrap());
-    spawner.spawn(net_task(runner).unwrap());
-
-    stack.wait_config_up().await;
-
-    if let Some(config) = stack.config_v4() {
-        println!("Got IP: {}", config.address);
-    }
+        CONFIG.wifi_ssid,
+        CONFIG.wifi_password,
+    )
+    .await?;
 
     // Init HTTP client
     let tcp_client = TcpClient::new(
@@ -366,33 +333,4 @@ async fn main(spawner: Spawner) -> ! {
     run(spawner).await.unwrap();
     #[allow(clippy::empty_loop)]
     loop {}
-}
-
-#[embassy_executor::task]
-async fn connection(mut controller: esp_radio::wifi::WifiController<'static>) {
-    println!("start connection task");
-
-    loop {
-        println!("About to connect...");
-
-        match controller.connect_async().await {
-            Ok(info) => {
-                println!("Wifi connected to {:?}", info);
-
-                // wait until we're no longer connected
-                let info = controller.wait_for_disconnect_async().await.ok();
-                println!("Disconnected: {:?}", info);
-            }
-            Err(e) => {
-                println!("Failed to connect to wifi: {e:?}");
-            }
-        }
-
-        Timer::after(Duration::from_millis(5000)).await
-    }
-}
-
-#[embassy_executor::task]
-async fn net_task(mut runner: Runner<'static, esp_radio::wifi::Interface>) {
-    runner.run().await
 }
