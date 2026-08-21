@@ -73,10 +73,8 @@ type SpiT = embedded_hal_bus::spi::ExclusiveDevice<
     gpio::Output<'static>,
     embedded_hal_bus::spi::NoDelay,
 >;
-type BusyPin = gpio::Input<'static>;
-type DCPin = gpio::Output<'static>;
-type RSTPin = gpio::Output<'static>;
-type Epd = Epd2in13<SpiT, BusyPin, DCPin, RSTPin, Delay>;
+type Epd =
+    Epd2in13<SpiT, gpio::Input<'static>, gpio::Output<'static>, gpio::Output<'static>, Delay>;
 struct Context {
     delay: Delay,
     spi: SpiT,
