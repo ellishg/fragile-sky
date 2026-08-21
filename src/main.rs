@@ -7,6 +7,7 @@ use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
+use embassy_time::{Duration, Timer};
 use embedded_graphics::{
     draw_target::DrawTarget,
     mono_font::{
@@ -190,6 +191,7 @@ async fn run(spawner: Spawner) -> Result<()> {
     ctx.epd
         .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)?;
     for _ in 0..10 {
+        // TODO: Move draw frames to spawner tasks
         println!("draw frame");
         draw_next_arrivals(&mut ctx)?;
         ctx.epd
@@ -197,7 +199,7 @@ async fn run(spawner: Spawner) -> Result<()> {
 
         // Delay for a minute and update the arrival times
         // TODO: Periodically fetch new arrival times
-        ctx.delay.delay_millis(60_000u32);
+        Timer::after(Duration::from_secs(60)).await;
         for i in 0..ctx.next_arrivals.len() {
             ctx.next_arrivals[i].1 = ctx.next_arrivals[i]
                 .1
