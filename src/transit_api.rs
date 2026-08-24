@@ -1,3 +1,4 @@
+pub(crate) use crate::error::Result;
 use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -8,13 +9,17 @@ use embassy_net::{
     tcp::client::{TcpClient, TcpClientState},
     Stack,
 };
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Sender;
+use embassy_time::Timer;
 use esp_println::println;
 use reqwless::{
     client::HttpClient,
     request::{Method, RequestBuilder},
 };
 
-static TCP_CLIENT_STATE: static_cell::StaticCell<TcpClientState<1, 1500, 1500>> =
+// TODO: Find good sizes
+pub static TCP_CLIENT_STATE: static_cell::StaticCell<TcpClientState<1, 1500, 1500>> =
     static_cell::StaticCell::new();
 
 // TODO: Move to cfg.toml
@@ -43,16 +48,13 @@ static STOP_CONFIGS: [StopConfig; 4] = [
 ];
 
 pub async fn fetch_arrivals(
+    client: &mut TcpClient<'static, 1, 1500, 1500>,
     stack: Stack<'static>,
     api_key: &'static str,
 ) -> crate::Result<Vec<(&'static str, Vec<u64>)>> {
-    let tcp_client = TcpClient::new(
-        stack,
-        TCP_CLIENT_STATE.uninit().write(TcpClientState::new()),
-    );
     let dns_client = DnsSocket::new(stack);
 
-    let mut client = HttpClient::new(&tcp_client, &dns_client);
+    let mut client = HttpClient::new(client, &dns_client);
     let mut rx_buf = [0u8; 16 * 1024];
 
     let mut next_arrivals = vec![];
@@ -79,6 +81,44 @@ pub async fn fetch_arrivals(
     }
 
     Ok(next_arrivals)
+}
+
+#[embassy_executor::task]
+pub async fn update_arrivals_task(
+    stack: Stack<'static>,
+    api_key: &'static str,
+    tcp_client_state: &'static mut TcpClientState<1, 1500, 1500>,
+    sender: Sender<'static, CriticalSectionRawMutex, Vec<(&'static str, Vec<u64>)>, 2>,
+) {
+    let mut tcp_client = TcpClient::new(stack, tcp_client_state);
+    update_arrivals(&mut tcp_client, stack, api_key, sender)
+        .await
+        .unwrap();
+}
+
+async fn update_arrivals(
+    tcp_client: &mut TcpClient<'static, 1, 1500, 1500>,
+    stack: Stack<'static>,
+    api_key: &'static str,
+    sender: Sender<'static, CriticalSectionRawMutex, Vec<(&'static str, Vec<u64>)>, 2>,
+) -> Result<()> {
+    loop {
+        // TODO: Configure how often to fetch times from network
+        let mut next_arrivals = fetch_arrivals(tcp_client, stack, api_key).await?;
+        sender.send(next_arrivals.clone()).await;
+        for _ in 0..5 {
+            Timer::after_secs(60).await;
+            // TODO:
+            for arrivals in &mut next_arrivals {
+                arrivals.1 = arrivals
+                    .1
+                    .iter()
+                    .filter_map(|time| time.checked_sub(1))
+                    .collect();
+            }
+            sender.send(next_arrivals.clone()).await;
+        }
+    }
 }
 
 fn get_minutes_until_next_arrivals(content: &str) -> crate::Result<Vec<u64>> {

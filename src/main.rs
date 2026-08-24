@@ -3,17 +3,14 @@
 
 extern crate alloc;
 
-use alloc::format;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_net::tcp::client::TcpClientState;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embedded_graphics::{
     draw_target::DrawTarget,
-    mono_font::{
-        ascii::{FONT_9X15, FONT_9X15_BOLD},
-        MonoTextStyleBuilder,
-    },
+    mono_font::{ascii::FONT_9X15, MonoTextStyleBuilder},
     prelude::*,
     text::Text,
 };
@@ -34,13 +31,19 @@ use esp_hal::{
     time::Rate,
     Blocking,
 };
-use esp_println::println;
-
+mod display;
 mod error;
 mod transit_api;
 mod wifi;
 
 pub(crate) use error::Result;
+
+static DISPLAY_CHANNEL: Channel<
+    CriticalSectionRawMutex,
+    // TODO: New struct
+    Vec<(&'static str, Vec<u64>)>,
+    2,
+> = Channel::new();
 
 #[derive(Debug)]
 #[toml_cfg::toml_config]
@@ -53,6 +56,7 @@ pub struct Config {
     api_key: &'static str,
 }
 
+// TODO: Move to display.rs
 type SpiT = embedded_hal_bus::spi::ExclusiveDevice<
     Spi<'static, Blocking>,
     gpio::Output<'static>,
@@ -65,10 +69,9 @@ struct Context {
     spi: SpiT,
     epd: Epd,
     display: Display2in13,
-    next_arrivals: Vec<(&'static str, Vec<u64>)>,
 }
 
-async fn init(spawner: Spawner) -> Result<Context> {
+async fn init(spawner: Spawner) -> Result<(Context, embassy_net::Stack<'static>)> {
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
@@ -120,92 +123,41 @@ async fn init(spawner: Spawner) -> Result<Context> {
     )
     .await?;
 
-    let next_arrivals = transit_api::fetch_arrivals(stack, CONFIG.api_key).await?;
-
-    Ok(Context {
-        delay,
-        spi,
-        epd,
-        display,
-        next_arrivals,
-    })
-}
-
-fn draw_next_arrivals(ctx: &mut Context) -> Result<()> {
-    ctx.display.clear(Color::White)?;
-
-    let name_style = MonoTextStyleBuilder::new()
-        .font(&FONT_9X15_BOLD)
-        .text_color(Color::Black)
-        .build();
-    let style = MonoTextStyleBuilder::new()
-        .font(&FONT_9X15)
-        .text_color(Color::Black)
-        .build();
-
-    // This display is 122x250 px
-    for (i, (name, next_arrivals)) in ctx.next_arrivals.iter().enumerate() {
-        let i = i as i32;
-        let (x, y) = (i % 2, i / 2);
-        Text::new(name, Point::new(5 + x * 125, 15 + y * 45), name_style).draw(&mut ctx.display)?;
-
-        if !next_arrivals.is_empty() {
-            let joined_next_arrivals = next_arrivals
-                .iter()
-                .take(3)
-                .map(|t| t.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            Text::new(
-                format!("{} mins", joined_next_arrivals).as_str(),
-                Point::new(5 + x * 125, 35 + y * 45),
-                style,
-            )
-            .draw(&mut ctx.display)?;
-        }
-    }
-    Ok(())
+    Ok((
+        Context {
+            delay,
+            spi,
+            epd,
+            display,
+        },
+        stack,
+    ))
 }
 
 async fn run(spawner: Spawner) -> Result<()> {
     esp_alloc::heap_allocator!(size: 128 * 1024);
 
-    let mut ctx = init(spawner).await?;
+    let (mut ctx, stack) = init(spawner).await?;
+    // TODO: Move to init
+    let tcp_client_state = transit_api::TCP_CLIENT_STATE.init(TcpClientState::new());
 
     ctx.epd
         .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)?;
-    for _ in 0..10 {
-        // TODO: Move draw frames to spawner tasks
-        println!("draw frame");
-        draw_next_arrivals(&mut ctx)?;
-        ctx.epd
-            .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
 
-        // Delay for a minute and update the arrival times
-        // TODO: Periodically fetch new arrival times
-        Timer::after(Duration::from_secs(60)).await;
-        for i in 0..ctx.next_arrivals.len() {
-            ctx.next_arrivals[i].1 = ctx.next_arrivals[i]
-                .1
-                .iter()
-                .filter_map(|time| time.checked_sub(1))
-                .collect();
-        }
-        ctx.epd
-            .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Quick)?;
-    }
+    spawner.spawn(display::display_task(ctx, DISPLAY_CHANNEL.receiver())?);
+    spawner.spawn(transit_api::update_arrivals_task(
+        stack,
+        CONFIG.api_key,
+        tcp_client_state,
+        DISPLAY_CHANNEL.sender(),
+    )?);
 
-    ctx.display.clear(Color::White)?;
-    ctx.epd
-        .set_refresh(&mut ctx.spi, &mut ctx.delay, RefreshLut::Full)?;
-    ctx.epd
-        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
     Ok(())
 }
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     run(spawner).await.unwrap();
-    #[allow(clippy::empty_loop)]
-    loop {}
+    core::future::pending::<()>().await;
+    unreachable!();
 }
