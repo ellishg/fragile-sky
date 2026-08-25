@@ -31,19 +31,19 @@ struct StopConfig {
 static STOP_CONFIGS: [StopConfig; 4] = [
     StopConfig {
         stop_code: 13911,
-        name: "N Eastbound",
+        name: "N Cole & Carl E",
     },
     StopConfig {
         stop_code: 13909,
-        name: "N Westbound",
+        name: "N Cole & Carl W",
     },
     StopConfig {
         stop_code: 14946,
-        name: "Hght&Clytn W",
+        name: "Haight & Clayton W",
     },
     StopConfig {
         stop_code: 14947,
-        name: "Hght&Clytn E",
+        name: "Haight & Clayton E",
     },
 ];
 

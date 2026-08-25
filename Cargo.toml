@@ -13,6 +13,7 @@ esp-hal = { version = "1.1.0", features = ["esp32c6", "unstable"] }
 esp-alloc = { version = "0.10.0", features = ["esp32c6"] }
 esp-backtrace = { version = "0.19.0", features = ["esp32c6", "println", "panic-handler"] }
 esp-println = { version = "0.17.0", features = ["esp32c6"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32c6"] }
 embedded-hal-bus = "0.3.0"
 esp-radio = { version = "1.0.0-beta.0", features = ["esp32c6", "wifi", "esp-now", "esp-alloc", "unstable"] }
 esp-rtos = { version = "0.3.0", features = ["esp32c6", "esp-radio", "esp-alloc", "embassy"] }
@@ -35,3 +36,6 @@ static_cell = "2.1.0"
 
 [profile.dev.package.esp-radio]
 opt-level = 2
+
+[dev-dependencies]
+espflash = "4.5.0"
