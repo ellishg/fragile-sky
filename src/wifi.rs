@@ -1,6 +1,7 @@
+pub(crate) use crate::error::Result;
 use embassy_executor::Spawner;
 use embassy_net::{Runner, Stack, StackResources};
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use esp_hal::peripherals::WIFI;
 use esp_println::println;
 use esp_radio::wifi;
@@ -52,21 +53,24 @@ pub async fn connect(
 }
 
 #[embassy_executor::task]
-async fn connection(mut controller: wifi::WifiController<'static>) {
+async fn connection(controller: wifi::WifiController<'static>) {
+    connection_impl(controller).await.unwrap();
+}
+
+async fn connection_impl(mut controller: wifi::WifiController<'static>) -> Result<()> {
     loop {
         match controller.connect_async().await {
             Ok(info) => {
                 println!("Wifi connected to {:?}", info);
 
-                let info = controller.wait_for_disconnect_async().await.ok();
+                let info = controller.wait_for_disconnect_async().await?;
                 println!("Disconnected: {:?}", info);
             }
             Err(e) => {
                 println!("Failed to connect to wifi: {e:?}");
             }
         }
-
-        Timer::after(Duration::from_millis(5000)).await
+        Timer::after_millis(5000).await;
     }
 }
 

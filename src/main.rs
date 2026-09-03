@@ -101,6 +101,7 @@ async fn run(spawner: Spawner) -> Result<()> {
     let mut display = Display1in54::default();
     display.clear(Color::White)?;
 
+    // TODO: Move to display.rs
     let style = MonoTextStyleBuilder::new()
         .font(&FONT_10X20)
         .text_color(Color::Black)
