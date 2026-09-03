@@ -74,6 +74,7 @@ struct Context {
 }
 
 async fn init(spawner: Spawner) -> Result<(Context, embassy_net::Stack<'static>)> {
+    esp_println::logger::init_logger_from_env();
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
