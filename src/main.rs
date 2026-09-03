@@ -2,22 +2,11 @@
 #![no_main]
 
 extern crate alloc;
+pub(crate) use error::Result;
 
-use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_net::tcp::client::TcpClientState;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embedded_graphics::{
-    draw_target::DrawTarget,
-    mono_font::{ascii::FONT_10X20, MonoTextStyleBuilder},
-    prelude::*,
-    text::Text,
-};
-use epd_waveshare::{
-    color::*,
-    epd1in54_v2::{Display1in54, Epd1in54},
-    prelude::*,
-};
+use epd_waveshare::{epd1in54_v2::Epd1in54, prelude::*};
 use esp_backtrace as _;
 use esp_hal::{
     delay::Delay,
@@ -34,16 +23,7 @@ mod power;
 mod transit_api;
 mod wifi;
 
-pub(crate) use error::Result;
-
 esp_bootloader_esp_idf::esp_app_desc!();
-
-static DISPLAY_CHANNEL: Channel<
-    CriticalSectionRawMutex,
-    // TODO: New struct
-    Vec<(&'static str, Vec<u64>)>,
-    2,
-> = Channel::new();
 
 #[derive(Debug)]
 #[toml_cfg::toml_config]
@@ -92,22 +72,13 @@ async fn run(spawner: Spawner) -> Result<()> {
     .with_sck(clk)
     .with_mosi(din);
 
-    let mut delay = Delay::new();
-
     let mut spi = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(spi, cs)?;
 
-    let mut epd = Epd1in54::new(&mut spi, busy, dc, rst, &mut delay, None)?;
+    let mut delay = Delay::new();
+    let epd = Epd1in54::new(&mut spi, busy, dc, rst, &mut delay, None)?;
 
-    let mut display = Display1in54::default();
-    display.clear(Color::White)?;
-
-    // TODO: Move to display.rs
-    let style = MonoTextStyleBuilder::new()
-        .font(&FONT_10X20)
-        .text_color(Color::Black)
-        .build();
-    Text::new("Connecting...", Point::new(5, 15), style).draw(&mut display)?;
-    epd.update_and_display_frame(&mut spi, display.buffer(), &mut delay)?;
+    display::spawn_display_task(spawner, epd, spi, delay)?;
+    display::send_display_frame(display::FrameState::WifiConnecting).await;
 
     let stack = wifi::connect(
         spawner,
@@ -119,18 +90,10 @@ async fn run(spawner: Spawner) -> Result<()> {
 
     let tcp_client_state = transit_api::TCP_CLIENT_STATE.init(TcpClientState::new());
 
-    spawner.spawn(display::display_task(
-        epd,
-        spi,
-        display,
-        delay,
-        DISPLAY_CHANNEL.receiver(),
-    )?);
     spawner.spawn(transit_api::update_arrivals_task(
         stack,
         CONFIG.api_key,
         tcp_client_state,
-        DISPLAY_CHANNEL.sender(),
     )?);
 
     Ok(())

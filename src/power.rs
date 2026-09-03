@@ -1,7 +1,9 @@
 pub(crate) use super::error::Result;
-use esp_hal::i2c::master::Config as I2cConfig;
+use crate::display;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use esp_hal::{
     gpio::{Input, InputConfig, Pull},
+    i2c::master::Config as I2cConfig,
     i2c::master::I2c,
     peripherals::GPIO2,
     Async,
@@ -15,6 +17,8 @@ const REG_OUTPUT: u8 = 0x01;
 const POWER_LATCH_PIN: u8 = 1 << 5;
 const POWER_LATCH_CONFIG: u8 = !POWER_LATCH_PIN;
 const POWER_UNLATCHED: u8 = 0x00;
+
+static POWER_OFF_DONE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 pub fn spawn_power_task(
     spawner: embassy_executor::Spawner,
@@ -49,7 +53,12 @@ async fn power_task_impl(mut i2c: I2c<'static, Async>, mut button: Input<'static
 
     println!("Power button pressed, unlatching power");
     // TODO: Draw to screen to indicate device is off.
+    display::send_display_frame(display::FrameState::PowerOff(&POWER_OFF_DONE)).await;
+    println!("Waiting for power off done signal");
+    POWER_OFF_DONE.wait().await;
+    println!("Power off done signal received, unlatching power");
     i2c.write_async(TCA9554_ADDR, &[REG_OUTPUT, POWER_UNLATCHED])
         .await?;
+    // TODO: Shut down in case power is connected?
     Ok(())
 }

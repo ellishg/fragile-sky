@@ -1,3 +1,4 @@
+use crate::display;
 pub(crate) use crate::error::Result;
 use alloc::format;
 use alloc::vec;
@@ -9,8 +10,6 @@ use embassy_net::{
     tcp::client::{TcpClient, TcpClientState},
     Stack,
 };
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Sender;
 use embassy_time::Timer;
 use esp_println::println;
 use reqwless::{
@@ -88,10 +87,9 @@ pub async fn update_arrivals_task(
     stack: Stack<'static>,
     api_key: &'static str,
     tcp_client_state: &'static mut TcpClientState<1, 1500, 1500>,
-    sender: Sender<'static, CriticalSectionRawMutex, Vec<(&'static str, Vec<u64>)>, 2>,
 ) {
     let mut tcp_client = TcpClient::new(stack, tcp_client_state);
-    update_arrivals(&mut tcp_client, stack, api_key, sender)
+    update_arrivals(&mut tcp_client, stack, api_key)
         .await
         .unwrap();
 }
@@ -100,12 +98,11 @@ async fn update_arrivals(
     tcp_client: &mut TcpClient<'static, 1, 1500, 1500>,
     stack: Stack<'static>,
     api_key: &'static str,
-    sender: Sender<'static, CriticalSectionRawMutex, Vec<(&'static str, Vec<u64>)>, 2>,
 ) -> Result<()> {
     loop {
         // TODO: Configure how often to fetch times from network
         let mut next_arrivals = fetch_arrivals(tcp_client, stack, api_key).await?;
-        sender.send(next_arrivals.clone()).await;
+        display::send_display_frame(display::FrameState::Arrivals(next_arrivals.clone())).await;
         for _ in 0..5 {
             Timer::after_secs(60).await;
             // TODO:
@@ -116,7 +113,7 @@ async fn update_arrivals(
                     .filter_map(|time| time.checked_sub(1))
                     .collect();
             }
-            sender.send(next_arrivals.clone()).await;
+            display::send_display_frame(display::FrameState::Arrivals(next_arrivals.clone())).await;
         }
     }
 }

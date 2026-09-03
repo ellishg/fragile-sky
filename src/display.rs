@@ -1,7 +1,12 @@
+pub(crate) use super::error::Result;
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    channel::{Channel, Receiver},
+    signal::Signal,
+};
 use embedded_graphics::{
     draw_target::DrawTarget,
     mono_font::{
@@ -20,7 +25,11 @@ use esp_backtrace as _;
 use esp_hal::{delay::Delay, gpio, spi::master::Spi, Blocking};
 use esp_println::println;
 
-pub(crate) use super::error::Result;
+pub enum FrameState {
+    WifiConnecting,
+    Arrivals(Vec<(&'static str, Vec<u64>)>),
+    PowerOff(&'static Signal<CriticalSectionRawMutex, ()>),
+}
 
 type SpiT = embedded_hal_bus::spi::ExclusiveDevice<
     Spi<'static, Blocking>,
@@ -30,18 +39,41 @@ type SpiT = embedded_hal_bus::spi::ExclusiveDevice<
 type Epd =
     Epd1in54<SpiT, gpio::Input<'static>, gpio::Output<'static>, gpio::Output<'static>, Delay>;
 
+static DISPLAY_CHANNEL: Channel<CriticalSectionRawMutex, FrameState, 3> = Channel::new();
+
+pub async fn send_display_frame(frame_state: FrameState) {
+    DISPLAY_CHANNEL.sender().send(frame_state).await;
+}
+
+pub fn spawn_display_task(
+    spawner: embassy_executor::Spawner,
+    epd: Epd,
+    spi: SpiT,
+    delay: Delay,
+) -> Result<()> {
+    let display = Display1in54::default();
+    spawner.spawn(display_task(
+        epd,
+        spi,
+        display,
+        delay,
+        DISPLAY_CHANNEL.receiver(),
+    )?);
+    Ok(())
+}
+
 #[embassy_executor::task]
-pub async fn display_task(
+async fn display_task(
     mut epd: Epd,
     mut spi: SpiT,
     mut display: Display1in54,
     mut delay: super::Delay,
-    receiver: Receiver<'static, CriticalSectionRawMutex, Vec<(&'static str, Vec<u64>)>, 2>,
+    receiver: Receiver<'static, CriticalSectionRawMutex, FrameState, 3>,
 ) {
     loop {
-        let next_arrivals = receiver.receive().await;
+        let frame_state = receiver.receive().await;
         println!("draw frame");
-        draw_frame(&mut epd, &mut spi, &mut display, &mut delay, next_arrivals).unwrap();
+        draw_frame(&mut epd, &mut spi, &mut display, &mut delay, frame_state).unwrap();
     }
 }
 
@@ -50,19 +82,37 @@ fn draw_frame(
     spi: &mut SpiT,
     display: &mut Display1in54,
     delay: &mut esp_hal::delay::Delay,
-    next_arrivals: Vec<(&'static str, Vec<u64>)>,
+    frame_state: FrameState,
 ) -> Result<()> {
-    draw_next_arrivals(display, next_arrivals)?;
+    display.clear(Color::White)?;
+    match &frame_state {
+        FrameState::WifiConnecting => draw_wifi_connecting(display)?,
+        FrameState::Arrivals(next_arrivals) => draw_next_arrivals(display, next_arrivals)?,
+        FrameState::PowerOff(_) => draw_power_off(display)?,
+    };
     epd.update_and_display_frame(spi, display.buffer(), delay)?;
+    if let FrameState::PowerOff(done) = frame_state {
+        println!("Power off done, signaling");
+        // TODO: Need an async wait so we don't busy wait the CPU.
+        epd.wait_until_idle(spi, delay)?;
+        done.signal(());
+    }
+    Ok(())
+}
+
+fn draw_wifi_connecting(display: &mut Display1in54) -> Result<()> {
+    let style = MonoTextStyleBuilder::new()
+        .font(&FONT_10X20)
+        .text_color(Color::Black)
+        .build();
+    Text::new("Connecting to wifi...", Point::new(5, 15), style).draw(display)?;
     Ok(())
 }
 
 fn draw_next_arrivals(
     display: &mut Display1in54,
-    next_arrivals: Vec<(&'static str, Vec<u64>)>,
+    next_arrivals: &[(&'static str, Vec<u64>)],
 ) -> Result<()> {
-    display.clear(Color::White)?;
-
     let name_style = MonoTextStyleBuilder::new()
         .font(&FONT_10X20)
         .text_color(Color::Black)
@@ -100,5 +150,14 @@ fn draw_next_arrivals(
             .draw(display)?;
         }
     }
+    Ok(())
+}
+
+fn draw_power_off(display: &mut Display1in54) -> Result<()> {
+    let style = MonoTextStyleBuilder::new()
+        .font(&FONT_10X20)
+        .text_color(Color::Black)
+        .build();
+    Text::new("Powering off...", Point::new(5, 15), style).draw(display)?;
     Ok(())
 }
