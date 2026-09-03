@@ -1,8 +1,7 @@
 use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Receiver;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Receiver};
 use embedded_graphics::{
     draw_target::DrawTarget,
     mono_font::{
@@ -12,38 +11,57 @@ use embedded_graphics::{
     prelude::*,
     text::Text,
 };
-use epd_waveshare::{color::*, prelude::*};
+use epd_waveshare::{
+    color::*,
+    epd1in54_v2::{Display1in54, Epd1in54},
+    prelude::*,
+};
 use esp_backtrace as _;
+use esp_hal::{delay::Delay, gpio, spi::master::Spi, Blocking};
 use esp_println::println;
-
-use super::Context;
 
 pub(crate) use super::error::Result;
 
+type SpiT = embedded_hal_bus::spi::ExclusiveDevice<
+    Spi<'static, Blocking>,
+    gpio::Output<'static>,
+    embedded_hal_bus::spi::NoDelay,
+>;
+type Epd =
+    Epd1in54<SpiT, gpio::Input<'static>, gpio::Output<'static>, gpio::Output<'static>, Delay>;
+
 #[embassy_executor::task]
 pub async fn display_task(
-    mut ctx: Context,
+    mut epd: Epd,
+    mut spi: SpiT,
+    mut display: Display1in54,
+    mut delay: super::Delay,
     receiver: Receiver<'static, CriticalSectionRawMutex, Vec<(&'static str, Vec<u64>)>, 2>,
 ) {
     loop {
         let next_arrivals = receiver.receive().await;
         println!("draw frame");
-        draw_frame(&mut ctx, next_arrivals).unwrap();
+        draw_frame(&mut epd, &mut spi, &mut display, &mut delay, next_arrivals).unwrap();
     }
 }
 
-fn draw_frame(ctx: &mut Context, next_arrivals: Vec<(&'static str, Vec<u64>)>) -> Result<()> {
-    draw_next_arrivals(ctx, next_arrivals)?;
-    ctx.epd
-        .update_and_display_frame(&mut ctx.spi, ctx.display.buffer(), &mut ctx.delay)?;
+fn draw_frame(
+    epd: &mut Epd,
+    spi: &mut SpiT,
+    display: &mut Display1in54,
+    delay: &mut esp_hal::delay::Delay,
+    next_arrivals: Vec<(&'static str, Vec<u64>)>,
+) -> Result<()> {
+    draw_next_arrivals(display, next_arrivals)?;
+    epd.update_and_display_frame(spi, display.buffer(), delay)?;
     Ok(())
 }
 
 fn draw_next_arrivals(
-    ctx: &mut Context,
+    display: &mut Display1in54,
     next_arrivals: Vec<(&'static str, Vec<u64>)>,
 ) -> Result<()> {
-    ctx.display.clear(Color::White)?;
+    display.clear(Color::White)?;
 
     let name_style = MonoTextStyleBuilder::new()
         .font(&FONT_10X20)
@@ -57,7 +75,7 @@ fn draw_next_arrivals(
     // This display is 200x200 px
     for (i, (name, next_arrivals)) in next_arrivals.iter().enumerate() {
         let i = i as i32;
-        Text::new(name, Point::new(5, 15 + i * 45), name_style).draw(&mut ctx.display)?;
+        Text::new(name, Point::new(5, 15 + i * 45), name_style).draw(display)?;
 
         if !next_arrivals.is_empty() {
             // TODO: Display as:
@@ -79,7 +97,7 @@ fn draw_next_arrivals(
                 Point::new(5, 35 + i * 45),
                 style,
             )
-            .draw(&mut ctx.display)?;
+            .draw(display)?;
         }
     }
     Ok(())

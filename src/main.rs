@@ -6,8 +6,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use embassy_executor::Spawner;
 use embassy_net::tcp::client::TcpClientState;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 use embedded_graphics::{
     draw_target::DrawTarget,
     mono_font::{ascii::FONT_10X20, MonoTextStyleBuilder},
@@ -20,16 +19,14 @@ use epd_waveshare::{
     prelude::*,
 };
 use esp_backtrace as _;
-use esp_hal::interrupt::software::SoftwareInterruptControl;
-use esp_hal::timer::timg::TimerGroup;
 use esp_hal::{
     delay::Delay,
-    gpio,
     gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull},
+    interrupt::software::SoftwareInterruptControl,
     spi,
     spi::{master::Spi, Mode},
     time::Rate,
-    Blocking,
+    timer::timg::TimerGroup,
 };
 mod display;
 mod error;
@@ -59,22 +56,8 @@ pub struct Config {
     api_key: &'static str,
 }
 
-// TODO: Move to display.rs
-type SpiT = embedded_hal_bus::spi::ExclusiveDevice<
-    Spi<'static, Blocking>,
-    gpio::Output<'static>,
-    embedded_hal_bus::spi::NoDelay,
->;
-type Epd =
-    Epd1in54<SpiT, gpio::Input<'static>, gpio::Output<'static>, gpio::Output<'static>, Delay>;
-struct Context {
-    delay: Delay,
-    spi: SpiT,
-    epd: Epd,
-    display: Display1in54,
-}
-
-async fn init(spawner: Spawner) -> Result<(Context, embassy_net::Stack<'static>)> {
+async fn run(spawner: Spawner) -> Result<()> {
+    esp_alloc::heap_allocator!(size: 128 * 1024);
     esp_println::logger::init_logger_from_env();
     let peripherals = esp_hal::init(esp_hal::Config::default());
 
@@ -113,7 +96,7 @@ async fn init(spawner: Spawner) -> Result<(Context, embassy_net::Stack<'static>)
 
     let mut spi = embedded_hal_bus::spi::ExclusiveDevice::new_no_delay(spi, cs)?;
 
-    let mut epd: Epd = Epd1in54::new(&mut spi, busy, dc, rst, &mut delay, None)?;
+    let mut epd = Epd1in54::new(&mut spi, busy, dc, rst, &mut delay, None)?;
 
     let mut display = Display1in54::default();
     display.clear(Color::White)?;
@@ -133,25 +116,15 @@ async fn init(spawner: Spawner) -> Result<(Context, embassy_net::Stack<'static>)
     )
     .await?;
 
-    Ok((
-        Context {
-            delay,
-            spi,
-            epd,
-            display,
-        },
-        stack,
-    ))
-}
-
-async fn run(spawner: Spawner) -> Result<()> {
-    esp_alloc::heap_allocator!(size: 128 * 1024);
-
-    let (ctx, stack) = init(spawner).await?;
-    // TODO: Move to init
     let tcp_client_state = transit_api::TCP_CLIENT_STATE.init(TcpClientState::new());
 
-    spawner.spawn(display::display_task(ctx, DISPLAY_CHANNEL.receiver())?);
+    spawner.spawn(display::display_task(
+        epd,
+        spi,
+        display,
+        delay,
+        DISPLAY_CHANNEL.receiver(),
+    )?);
     spawner.spawn(transit_api::update_arrivals_task(
         stack,
         CONFIG.api_key,
