@@ -33,6 +33,7 @@ use esp_hal::{
 };
 mod display;
 mod error;
+mod power;
 mod transit_api;
 mod wifi;
 
@@ -76,6 +77,14 @@ struct Context {
 async fn init(spawner: Spawner) -> Result<(Context, embassy_net::Stack<'static>)> {
     esp_println::logger::init_logger_from_env();
     let peripherals = esp_hal::init(esp_hal::Config::default());
+
+    power::spawn_power_task(
+        spawner,
+        peripherals.I2C0,
+        peripherals.GPIO18,
+        peripherals.GPIO8,
+        peripherals.GPIO2,
+    )?;
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_interrupt = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);

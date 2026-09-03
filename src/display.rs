@@ -16,9 +16,9 @@ use epd_waveshare::{color::*, prelude::*};
 use esp_backtrace as _;
 use esp_println::println;
 
-use super::{error, Context};
+use super::Context;
 
-pub(crate) use error::Result;
+pub(crate) use super::error::Result;
 
 #[embassy_executor::task]
 pub async fn display_task(

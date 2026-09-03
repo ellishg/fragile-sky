@@ -9,6 +9,8 @@ pub(crate) enum MyError {
     SpiDeviceError(
         #[from] embedded_hal_bus::spi::DeviceError<esp_hal::spi::Error, core::convert::Infallible>,
     ),
+    I2CMasterConfigError(#[from] esp_hal::i2c::master::ConfigError),
+    I2CMasterError(#[from] esp_hal::i2c::master::Error),
     SpiConfigError(#[from] esp_hal::spi::master::ConfigError),
     WifiError(#[from] esp_radio::wifi::WifiError),
     ReqwlessError(#[from] reqwless::Error),
